@@ -42,6 +42,8 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
 
 SECRET_KEY = os.getenv("SECRET_KEY")  # 환경변수로 관리
+if not SECRET_KEY:
+    raise RuntimeError("SECRET_KEY 환경변수가 설정되지 않았습니다.")
 ALGORITHM = "HS256"
 
 ACCESS_TOKEN_EXPIRE_MINUTES = 30  # access token 유효 시간 (분)
@@ -84,9 +86,13 @@ async def get_current_user(
 
     try:
         payload = decode_token(token)
-        email: str = payload.get("sub")
     except jwt.PyJWTError:
         raise credentials_exception
+
+    # access token만 인증에 허용 (refresh token 재사용 차단)
+    if payload.get("type") != "access":
+        raise credentials_exception
+    email: str = payload.get("sub")
 
     # DB로부터 사용자 조회
     user = db.query(User).filter(User.email == email).first()

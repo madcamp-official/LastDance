@@ -126,23 +126,23 @@ ID 표기: `problem_id`는 `db-schema.md`의 `problems.id`(BIGSERIAL) 그대로 
 
 | Method | Endpoint | 설명 | 요청 (Body) | 응답 |
 |---|---|---|---|---|
-| POST | `/sessions` | 문제 풀이 세션 시작 | `{"problem_id": 1, "language": "python3"}` | 201 `{"session_id": "s_001", "user_id": "1", "problem_id": 1, "language": "python3", "started_at": "2026-07-24T05:00:00Z", "status": "active"}` |
-| PATCH | `/sessions/{session_id}` | 세션 종료 처리 | `{"status": "solved", "ended_at": "2026-07-24T05:10:00Z"}` | 200 `{"session_id": "s_001", "status": "solved", "ended_at": "2026-07-24T05:10:00Z"}` |
+| POST | `/sessions` | 문제 풀이 세션 시작 | `{"problem_id": 1}` | 200 `{"session_id": "s_001", "problem_id": 1, "user_id": "u_001", "title": "Welcome to AtCoder", "statement": "You are given...", "constraints": "1<=a,b,c<=1000", "examples": [{"input": "1\n2 3\n", "output": "6"}], "source": "codenet_atcoder"}` |
+| PATCH | `/sessions/{session_id}` | 세션 종료 처리 | `{"status": "solved", "language": "python3"}` | 200 `{"session_id": "s_001", "status": "solved"}` |
 | GET | `/sessions/{session_id}` | 세션 상세 조회 | - | 200 `{"session_id": "s_001", "user_id": "1", "problem_id": 1, "language": "python3", "started_at": "2026-07-24T05:00:00Z", "ended_at": null, "status": "active"}` |
 
 **POST /sessions** 요청:
 | 키 | 타입 | 필수 | 예시 |
 |---|---|---|---|
 | problem_id | integer | O | `1` |
-| language | string | O | `"python3"` (`"cpp17"`, `"java17"` 등 — 지원 언어 목록은 채점 엔진 착수 시 확정) |
+// 언어는 문제를 보고 택할 수 있어야 하므로 요청 body에서 제거
 
 **PATCH /sessions/{session_id}** 요청:
 | 키 | 타입 | 필수 | 예시 | 설명 |
 |---|---|---|---|---|
-| status | string (enum) | O | `"solved"` | `"solved"` \| `"unsolved"` \| `"abandoned"` |
-| ended_at | string (ISO8601) | X | `"2026-07-24T05:10:00Z"` | 생략 시 서버 시각 사용 |
+| status | string (enum) | O | `"solved"` | `"solved"` \| `"abandoned"` |
+//unsolved라는 enum 제거, 서버가 시간을 측정해도 상관 없어서 시간 field도 제거.
 
-응답 공통 필드(세 엔드포인트): `session_id`(string), `user_id`(string), `problem_id`(integer), `language`(string), `started_at`(string, ISO8601), `ended_at`(string\|null), `status`(string enum: `"active"`\|`"solved"`\|`"unsolved"`\|`"abandoned"`)
+응답 공통 필드(세 엔드포인트): `session_id`(string), `user_id`(string), `problem_id`(integer), `started_at`(string, ISO8601), `ended_at`(string\|null), `status`(string enum: `"active"`\|`"solved"`\|`"abandoned"`)
 
 ---
 
