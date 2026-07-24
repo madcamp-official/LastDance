@@ -5,7 +5,7 @@
 | 이름 | GitHub | 역할 |
 |---|---|---|
 | 이재준 | dannyiscard |  |
-| 임유빈 |  |  |
+| 임유빈 | lunar-yoobin |  |
 
 ---
 
