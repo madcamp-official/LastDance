@@ -13,7 +13,10 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://languaai.madcamp-kaist.org"],
+    allow_origins=[
+        "https://languaai.madcamp-kaist.org",
+        "http://localhost:5173",  # 프론트엔드 로컬 개발 서버(Vite)
+    ],
     allow_methods=["*"],
     allow_headers=["*"],
 )

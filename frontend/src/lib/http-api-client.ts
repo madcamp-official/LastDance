@@ -54,8 +54,8 @@ export function createHttpApiClient(config: HttpApiClientConfig): IApiClient {
     }
 
     // 문서화된 엔드포인트는 {"error": {code, message}} 포맷이지만, 아직 백엔드에
-    // 구현되지 않은 라우트(예: /users/me)는 FastAPI 기본 {"detail": ...} 형태를
-    // 반환한다. 두 경우 모두 안전하게 파싱한다.
+    // 구현되지 않은 라우트는 FastAPI 기본 {"detail": ...} 형태를 반환한다.
+    // 두 경우 모두 안전하게 파싱한다.
     const raw = await res.json().catch(() => null)
     const errorBody = raw as ApiErrorBody | { detail?: unknown } | null
     const code =
@@ -130,7 +130,9 @@ export function createHttpApiClient(config: HttpApiClientConfig): IApiClient {
         })
       },
       me() {
-        return request<CurrentUser>('/users/me')
+        // docs/api-spec.md는 GET /users/me로 명시하지만 실제 백엔드(backend/app/api/auth.py)는
+        // auth 라우터 하위 GET /auth/me로 구현돼 있다 — 실제 백엔드 경로에 맞춤.
+        return request<CurrentUser>('/auth/me')
       },
     },
 
