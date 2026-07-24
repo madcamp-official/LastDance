@@ -70,7 +70,7 @@ export const useAuthStore = create<AuthState>((set, get) => {
         refreshToken: tokens.refresh_token,
         status: 'authenticated',
       })
-      // /users/me는 백엔드에 아직 구현되지 않았을 수 있음(2026-07-24 기준) — 실패해도 로그인 자체는 유효하다.
+      // 사용자 정보 조회가 실패해도(네트워크 등) 로그인 자체는 이미 유효하므로 막지 않는다.
       try {
         const user = await apiClient.auth.me()
         set({ user })
@@ -102,8 +102,8 @@ export const useAuthStore = create<AuthState>((set, get) => {
       }
       apiClient.setAccessToken(accessToken)
       // access token 자체의 유효성은 아직 모르므로 우선 authenticated로 낙관적 진입.
-      // /users/me가 401을 반환할 때만(= 토큰이 실제로 무효) 세션을 정리한다.
-      // 404 등 다른 에러(예: 엔드포인트 미구현)는 세션을 건드리지 않는다.
+      // 사용자 정보 조회가 401을 반환할 때만(= 토큰이 실제로 무효) 세션을 정리한다.
+      // 그 외 에러(네트워크 등)는 세션을 건드리지 않는다.
       set({ accessToken, refreshToken, status: 'authenticated' })
       try {
         const user = await apiClient.auth.me()

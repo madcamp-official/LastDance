@@ -26,7 +26,7 @@ const useMockApi = import.meta.env.VITE_USE_MOCK_API !== 'false'
 export const apiClient: IApiClient = useMockApi
   ? createMockApiClient()
   : createHttpApiClient({
-      baseUrl: import.meta.env.VITE_API_BASE_URL ?? '/api/v1',
+      baseUrl: import.meta.env.VITE_API_BASE_URL ?? '',
       getRefreshToken: () => authBridge.getRefreshToken(),
       onTokenRefreshed: (tokens) => authBridge.onTokenRefreshed(tokens),
       onRefreshFailed: () => authBridge.onRefreshFailed(),
