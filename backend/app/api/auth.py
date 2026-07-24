@@ -6,10 +6,10 @@ import jwt
 from fastapi import APIRouter, Depends, FastAPI, Request, status
 from fastapi.exceptions import HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.schema.user import SignupRequest, SignupResponse, LoginRequest, TokenResponse, RefreshRequest, AccessTokenResponse, MessageResponse, UserResponse
 from app.model.user import User
 from app.model.refresh_token import RefreshToken
 from app.util.security import (
@@ -17,6 +17,7 @@ from app.util.security import (
     create_access_token,
     create_refresh_token,
     decode_token,
+    get_current_user,
     get_password_hash,
     verify_password,
 )
@@ -36,44 +37,6 @@ def install_error_handler(app: FastAPI) -> None:
     @app.exception_handler(APIError)
     async def _handle_api_error(request: Request, exc: APIError):
         return JSONResponse(status_code=exc.status_code, content={"error": exc.detail})
-
-
-# ---- 요청/응답 스키마 ----
-class SignupRequest(BaseModel):
-    email: EmailStr
-    nickname: str
-    password: str
-
-
-class SignupResponse(BaseModel):
-    user_id: str
-    nickname: str
-    email: str
-    profile_img: Optional[str] = None
-
-
-class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str
-
-
-class TokenResponse(BaseModel):
-    access_token: str
-    refresh_token: str
-    token_type: str = "bearer"
-
-
-class RefreshRequest(BaseModel):
-    refresh_token: str
-
-
-class AccessTokenResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-
-
-class MessageResponse(BaseModel):
-    message: str
 
 
 # ---- 엔드포인트 ----
@@ -164,3 +127,15 @@ async def logout(body: RefreshRequest, db: Session = Depends(get_db)):
     db.query(RefreshToken).filter(RefreshToken.refresh_token == body.refresh_token).delete()
     db.commit()
     return MessageResponse(message="로그아웃 하였습니다.")
+
+
+@router.get("/me", response_model=UserResponse)
+async def me(current_user: User = Depends(get_current_user)):
+    # 보안 스킴(HTTPBearer) 사용 라우트. Swagger에 Authorize 좌물쇠 버튼 생김.
+    return UserResponse(
+        user_id=current_user.user_id,
+        nickname=current_user.nickname,
+        email=current_user.email,
+        profile_img=current_user.profile_img,
+        created_at=current_user.account_created.isoformat(),
+    )
