@@ -45,17 +45,15 @@ export interface CurrentUser extends UserSummary {
 // ── 문제 카탈로그 ────────────────────────────────────────
 
 export interface ProblemListItem {
-  problem_id: string
+  problem_id: number
   title: string
-  source: string
-  created_at: string
 }
 
 export interface ProblemListResponse {
   items: ProblemListItem[]
   page: number
   page_size: number
-  total: number
+  total_count: number
 }
 
 export interface ProblemExample {
@@ -64,14 +62,12 @@ export interface ProblemExample {
 }
 
 export interface ProblemDetail {
-  problem_id: string
+  problem_id: number
   title: string
   statement: string
   constraints: string | null
   examples: ProblemExample[]
   source: string
-  external_id: string
-  created_at: string
 }
 
 // ── 세션 ────────────────────────────────────────────────
@@ -79,14 +75,14 @@ export interface ProblemDetail {
 export type SessionStatus = 'active' | 'solved' | 'unsolved' | 'abandoned'
 
 export interface CreateSessionRequest {
-  problem_id: string
+  problem_id: number
   language: string
 }
 
 export interface Session {
   session_id: string
   user_id: string
-  problem_id: string
+  problem_id: number
   language: string
   started_at: string
   ended_at: string | null
@@ -118,7 +114,7 @@ export type SubmissionVerdict = 'AC' | 'WA' | 'TLE' | 'RE' | 'CE' | null
 
 export interface CreateSubmissionRequest {
   session_id: string
-  problem_id: string
+  problem_id: number
   code: string
   language: string
 }

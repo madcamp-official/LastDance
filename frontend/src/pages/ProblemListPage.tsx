@@ -23,7 +23,7 @@ export function ProblemListPage() {
       .then((res) => {
         if (cancelled) return
         setItems(res.items)
-        setTotal(res.total)
+        setTotal(res.total_count)
         setStatus('ready')
       })
       .catch((err) => {
