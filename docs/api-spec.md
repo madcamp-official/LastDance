@@ -83,8 +83,8 @@ ID 표기: 아래 예시의 `"1"`, `"p_001"` 등은 가독성을 위한 단순�
 
 | Method | Endpoint | 설명 | 요청 (Query/Body) | 응답 |
 |---|---|---|---|---|
-| GET | `/problems` | 문제 목록 조회 | Query: `?page=1&page_size=20` | 200 `{"items": [{"problem_id": "p_001", "title": "Welcome to AtCoder", "source": "codenet_atcoder", "created_at": "2026-07-01T00:00:00Z"}], "page": 1, "page_size": 20, "total": 128}` |
-| GET | `/problems/{problem_id}` | 문제 상세 조회 | - | 200 `{"problem_id": "p_001", "title": "Welcome to AtCoder", "statement": "You are given...", "constraints": "1<=a,b,c<=1000", "examples": [{"input": "1\n2 3\ntest", "output": "6 test"}], "source": "codenet_atcoder", "external_id": "practice_1", "created_at": "2026-07-01T00:00:00Z"}` |
+| GET | `/problems` | 문제 목록 조회 | Query: `?page=1&page_size=20` | 200 `{"items": [{"problem_id": 1, "title": "Welcome to AtCoder", "source": "codenet_atcoder", "created_at": "2026-07-01T00:00:00Z"}], "page": 1, "page_size": 20, "total": 128}` |
+| GET | `/problems/{problem_id}` | 문제 상세 조회 | - | 200 `{"problem_id": 1, "title": "Welcome to AtCoder", "statement": "You are given...", "constraints": "1<=a,b,c<=1000", "examples": [{"input": "1\n2 3\ntest", "output": "6 test"}], "source": "codenet_atcoder", "external_id": "practice_1", "created_at": "2026-07-01T00:00:00Z"}` |
 
 **GET /problems** 요청 쿼리:
 | 키 | 타입 | 필수 | 예시 | 설명 |
@@ -96,7 +96,7 @@ ID 표기: 아래 예시의 `"1"`, `"p_001"` 등은 가독성을 위한 단순�
 | 키 | 타입 | 예시 | 설명 |
 |---|---|---|---|
 | items | array\<object\> | 아래 참고 | |
-| items[].problem_id | string | `"p_001"` | |
+| items[].problem_id | integer | `1` | |
 | items[].title | string | `"Welcome to AtCoder"` | |
 | items[].source | string | `"codenet_atcoder"` | 고정값 (현재 소스가 하나뿐) |
 | items[].created_at | string (ISO8601) | `"2026-07-01T00:00:00Z"` | |
@@ -109,7 +109,7 @@ ID 표기: 아래 예시의 `"1"`, `"p_001"` 등은 가독성을 위한 단순�
 **GET /problems/{problem_id}** 응답 필드:
 | 키 | 타입 | 예시 | 설명 |
 |---|---|---|---|
-| problem_id | string | `"p_001"` | |
+| problem_id | integer | `1` | |
 | title | string | `"Welcome to AtCoder"` | |
 | statement | string | `"You are given..."` | 라이선스 검토 전까지 원문 노출 여부 재검토 (`CLAUDE.md` 참고) |
 | constraints | string \| null | `"1<=a,b,c<=1000"` | |
@@ -130,14 +130,14 @@ ID 표기: 아래 예시의 `"1"`, `"p_001"` 등은 가독성을 위한 단순�
 
 | Method | Endpoint | 설명 | 요청 (Body) | 응답 |
 |---|---|---|---|---|
-| POST | `/sessions` | 문제 풀이 세션 시작 | `{"problem_id": "p_001", "language": "python3"}` | 201 `{"session_id": "s_001", "user_id": "1", "problem_id": "p_001", "language": "python3", "started_at": "2026-07-24T05:00:00Z", "status": "active"}` |
+| POST | `/sessions` | 문제 풀이 세션 시작 | `{"problem_id": 1, "language": "python3"}` | 201 `{"session_id": "s_001", "user_id": "1", "problem_id": 1, "language": "python3", "started_at": "2026-07-24T05:00:00Z", "status": "active"}` |
 | PATCH | `/sessions/{session_id}` | 세션 종료 처리 | `{"status": "solved", "ended_at": "2026-07-24T05:10:00Z"}` | 200 `{"session_id": "s_001", "status": "solved", "ended_at": "2026-07-24T05:10:00Z"}` |
-| GET | `/sessions/{session_id}` | 세션 상세 조회 | - | 200 `{"session_id": "s_001", "user_id": "1", "problem_id": "p_001", "language": "python3", "started_at": "2026-07-24T05:00:00Z", "ended_at": null, "status": "active"}` |
+| GET | `/sessions/{session_id}` | 세션 상세 조회 | - | 200 `{"session_id": "s_001", "user_id": "1", "problem_id": 1, "language": "python3", "started_at": "2026-07-24T05:00:00Z", "ended_at": null, "status": "active"}` |
 
 **POST /sessions** 요청:
 | 키 | 타입 | 필수 | 예시 |
 |---|---|---|---|
-| problem_id | string | O | `"p_001"` |
+| problem_id | integer | O | `1` |
 | language | string | O | `"python3"` (`"cpp17"`, `"java17"` 등 — 지원 언어 목록은 채점 엔진 착수 시 확정) |
 
 **PATCH /sessions/{session_id}** 요청:
@@ -146,7 +146,7 @@ ID 표기: 아래 예시의 `"1"`, `"p_001"` 등은 가독성을 위한 단순�
 | status | string (enum) | O | `"solved"` | `"solved"` \| `"unsolved"` \| `"abandoned"` |
 | ended_at | string (ISO8601) | X | `"2026-07-24T05:10:00Z"` | 생략 시 서버 시각 사용 |
 
-응답 공통 필드(세 엔드포인트): `session_id`(string), `user_id`(string), `problem_id`(string), `language`(string), `started_at`(string, ISO8601), `ended_at`(string\|null), `status`(string enum: `"active"`\|`"solved"`\|`"unsolved"`\|`"abandoned"`)
+응답 공통 필드(세 엔드포인트): `session_id`(string), `user_id`(string), `problem_id`(integer), `language`(string), `started_at`(string, ISO8601), `ended_at`(string\|null), `status`(string enum: `"active"`\|`"solved"`\|`"unsolved"`\|`"abandoned"`)
 
 ---
 
@@ -174,7 +174,7 @@ ID 표기: 아래 예시의 `"1"`, `"p_001"` 등은 가독성을 위한 단순�
 
 | Method | Endpoint | 설명 | 요청 (Body) | 응답 |
 |---|---|---|---|---|
-| POST | `/submissions` | 코드 제출 접수 | `{"session_id": "s_001", "problem_id": "p_001", "code": "print('hello')", "language": "python3"}` | 202 `{"submission_id": "sub_001", "status": "pending", "submitted_at": "2026-07-24T05:09:00Z"}` |
+| POST | `/submissions` | 코드 제출 접수 | `{"session_id": "s_001", "problem_id": 1, "code": "print('hello')", "language": "python3"}` | 202 `{"submission_id": "sub_001", "status": "pending", "submitted_at": "2026-07-24T05:09:00Z"}` |
 | GET | `/submissions/{submission_id}` | 제출 상태/결과 조회 | - | 200 `{"submission_id": "sub_001", "status": "pending", "verdict": null, "runtime_ms": null, "memory_kb": null, "submitted_at": "2026-07-24T05:09:00Z"}` |
 | GET | `/submissions?session_id={id}` | 세션의 제출 이력 조회 | - | 200 `{"items": [{"submission_id": "sub_001", "status": "pending", "verdict": null, "submitted_at": "2026-07-24T05:09:00Z"}]}` |
 
@@ -182,7 +182,7 @@ ID 표기: 아래 예시의 `"1"`, `"p_001"` 등은 가독성을 위한 단순�
 | 키 | 타입 | 필수 | 예시 |
 |---|---|---|---|
 | session_id | string | O | `"s_001"` |
-| problem_id | string | O | `"p_001"` |
+| problem_id | integer | O | `1` |
 | code | string | O | `"print('hello')"` |
 | language | string | O | `"python3"` |
 
