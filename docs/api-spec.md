@@ -4,7 +4,7 @@ Base URL: `/api/v1`
 버전 전략: 확장 시 `/api/v2`로 분리. 기존 필드는 유지한 채 추가만 하는 방식으로 하위호환 지향.
 공통 에러 포맷: `{"error": {"code": "...", "message": "..."}}`
 날짜 포맷: ISO 8601 UTC 문자열 (예: `"2026-07-24T05:00:00Z"`)
-ID 표기: 아래 예시의 `"1"`, `"p_001"` 등은 가독성을 위한 단순화 값이며, 실제 값은 `db-schema.md`에 정의된 UUID 문자열입니다.
+ID 표기: `problem_id`는 `db-schema.md`의 `problems.id`(BIGSERIAL) 그대로 노출되는 **integer**입니다 (팀 확정). 그 외 `user_id`/`session_id`/`submission_id`/`feedback_id` 등은 `db-schema.md`에 정의된 UUID 문자열이며, 아래 예시의 `"1"`, `"p_001"` 등은 가독성을 위한 단순화 값입니다.
 
 ---
 
