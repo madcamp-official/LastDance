@@ -52,7 +52,7 @@ export interface IApiClient {
   }
   problems: {
     list(params?: ListProblemsParams): Promise<ProblemListResponse>
-    get(problemId: string): Promise<ProblemDetail>
+    get(problemId: number): Promise<ProblemDetail>
   }
   sessions: {
     create(req: CreateSessionRequest): Promise<Session>

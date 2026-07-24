@@ -31,7 +31,7 @@ interface StoredSession extends Session {}
 
 interface StoredSubmission extends Submission {
   session_id: string
-  problem_id: string
+  problem_id: number
 }
 
 interface StoredFeedback extends Feedback {
@@ -55,29 +55,24 @@ const STORAGE_KEY = 'lastdance_mock_db_v1'
 // 실제 CodeNet 문제 지문을 사용하지 않는, UI 개발 전용 placeholder 데이터.
 // source를 'mock_local'로 두어 확정된 'codenet_atcoder' 값과 구분한다.
 function seedDb(): MockDb {
-  const now = new Date().toISOString()
   return {
     users: [],
     problems: [
       {
-        problem_id: 'p_mock_001',
+        problem_id: 1,
         title: '[mock] 세 정수의 합',
         statement: '세 정수 a, b, c 가 주어질 때 그 합을 출력하시오.',
         constraints: '1 <= a, b, c <= 1000',
         examples: [{ input: '1 2 3', output: '6' }],
         source: 'mock_local',
-        external_id: 'mock_practice_1',
-        created_at: now,
       },
       {
-        problem_id: 'p_mock_002',
+        problem_id: 2,
         title: '[mock] 문자열 뒤집기',
         statement: '문자열 s가 주어질 때 이를 뒤집어 출력하시오.',
         constraints: '1 <= |s| <= 100',
         examples: [{ input: 'hello', output: 'olleh' }],
         source: 'mock_local',
-        external_id: 'mock_practice_2',
-        created_at: now,
       },
     ],
     sessions: [],
@@ -209,16 +204,16 @@ export function createMockApiClient(): IApiClient {
         const start = (page - 1) * pageSize
         const items = db.problems
           .slice(start, start + pageSize)
-          .map(({ problem_id, title, source, created_at }) => ({
-            problem_id,
-            title,
-            source,
-            created_at,
-          }))
-        return { items, page, page_size: pageSize, total: db.problems.length }
+          .map(({ problem_id, title }) => ({ problem_id, title }))
+        return {
+          items,
+          page,
+          page_size: pageSize,
+          total_count: db.problems.length,
+        }
       },
 
-      async get(problemId: string): Promise<ProblemDetail> {
+      async get(problemId: number): Promise<ProblemDetail> {
         const problem = db.problems.find((p) => p.problem_id === problemId)
         if (!problem) {
           throw new ApiError(404, 'PROBLEM_NOT_FOUND', '문제를 찾을 수 없습니다.')

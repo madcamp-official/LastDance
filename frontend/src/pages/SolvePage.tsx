@@ -19,6 +19,7 @@ function sessionStorageKey(problemId: string) {
 
 export function SolvePage() {
   const { problemId } = useParams<{ problemId: string }>()
+  const numericProblemId = problemId ? Number(problemId) : NaN
   const accessToken = useAuthStore((s) => s.accessToken)
 
   const [language, setLanguage] = useState<string>(SUPPORTED_LANGUAGES[0].value)
@@ -73,12 +74,12 @@ export function SolvePage() {
   }, [problemId])
 
   async function handleStart() {
-    if (!problemId) return
+    if (!problemId || Number.isNaN(numericProblemId)) return
     setStarting(true)
     setStartError(null)
     try {
       const created = await apiClient.sessions.create({
-        problem_id: problemId,
+        problem_id: numericProblemId,
         language,
       })
       setSession(created)
@@ -107,13 +108,13 @@ export function SolvePage() {
   }
 
   async function handleSubmit() {
-    if (!session || !problemId) return
+    if (!session || !problemId || Number.isNaN(numericProblemId)) return
     setSubmitting(true)
     setSubmitError(null)
     try {
       const res = await apiClient.submissions.create({
         session_id: session.session_id,
-        problem_id: problemId,
+        problem_id: numericProblemId,
         code,
         language,
       })

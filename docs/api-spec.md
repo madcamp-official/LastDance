@@ -64,7 +64,7 @@ ID 표기: 아래 예시의 `"1"`, `"p_001"` 등은 가독성을 위한 단순�
 요청: `{"refresh_token": "<jwt>"}` (키: refresh_token, 타입: string, 필수)
 응답 (200): `{"message": "로그아웃 하였습니다."}` (키: message, 타입: string)
 
-**GET /users/me** (Header: `Authorization: Bearer {access_token}`)
+**GET /auth/me** (Header: `Authorization: Bearer {access_token}`)
 
 응답 (200):
 | 키 | 타입 | 예시 |

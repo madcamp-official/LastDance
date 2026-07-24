@@ -142,7 +142,7 @@ export function createHttpApiClient(config: HttpApiClientConfig): IApiClient {
           `/problems${toQuery({ page: params?.page, page_size: params?.page_size })}`,
         )
       },
-      get(problemId: string) {
+      get(problemId: number) {
         return request<ProblemDetail>(`/problems/${problemId}`)
       },
     },

@@ -12,11 +12,16 @@ export function ProblemDetailPage() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!problemId) return
+    const numericId = Number(problemId)
+    if (!problemId || Number.isNaN(numericId)) {
+      setErrorMessage('잘못된 문제 id입니다.')
+      setStatus('error')
+      return
+    }
     let cancelled = false
     setStatus('loading')
     apiClient.problems
-      .get(problemId)
+      .get(numericId)
       .then((res) => {
         if (cancelled) return
         setProblem(res)
