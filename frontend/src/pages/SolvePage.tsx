@@ -17,6 +17,12 @@ function sessionStorageKey(problemId: string) {
   return `lastdance_session_${problemId}`
 }
 
+// Monaco에 입력한 코드는 서버에 저장되는 시점(제출)이 아니면 어디에도 안 남으므로,
+// 새로고침 시 유실되지 않도록 문제별로 클라이언트에 보관한다.
+function codeStorageKey(problemId: string) {
+  return `lastdance_code_${problemId}`
+}
+
 export function SolvePage() {
   const { problemId } = useParams<{ problemId: string }>()
   const numericProblemId = problemId ? Number(problemId) : NaN
@@ -53,6 +59,9 @@ export function SolvePage() {
         setSession(restored)
         setLanguage(restored.language)
 
+        const savedCode = localStorage.getItem(codeStorageKey(problemId))
+        if (savedCode !== null) setCode(savedCode)
+
         const submissions = await apiClient.submissions.listBySession(
           restored.session_id,
         )
@@ -65,6 +74,7 @@ export function SolvePage() {
       } catch {
         // 저장된 세션을 더 이상 찾을 수 없으면(만료/삭제 등) 참조를 지우고 시작 화면으로 둔다.
         localStorage.removeItem(sessionStorageKey(problemId))
+        localStorage.removeItem(codeStorageKey(problemId))
       }
     })()
 
@@ -85,6 +95,7 @@ export function SolvePage() {
       setSession(created)
       setCode('')
       localStorage.setItem(sessionStorageKey(problemId), created.session_id)
+      localStorage.removeItem(codeStorageKey(problemId))
     } catch (err) {
       setStartError(
         err instanceof ApiError ? err.message : '세션을 시작하지 못했습니다.',
@@ -95,7 +106,10 @@ export function SolvePage() {
   }
 
   function handleStartOver() {
-    if (problemId) localStorage.removeItem(sessionStorageKey(problemId))
+    if (problemId) {
+      localStorage.removeItem(sessionStorageKey(problemId))
+      localStorage.removeItem(codeStorageKey(problemId))
+    }
     setSession(null)
     setCode('')
     setSubmissionId(null)
@@ -105,6 +119,11 @@ export function SolvePage() {
 
   const handleEditorMount: OnMount = (editorInstance) => {
     attachEditor(editorInstance)
+  }
+
+  function handleCodeChange(value: string) {
+    setCode(value)
+    if (problemId) localStorage.setItem(codeStorageKey(problemId), value)
   }
 
   async function handleSubmit() {
@@ -229,7 +248,7 @@ export function SolvePage() {
         <CodeEditor
           language={language}
           value={code}
-          onChange={setCode}
+          onChange={handleCodeChange}
           onMount={handleEditorMount}
         />
 
