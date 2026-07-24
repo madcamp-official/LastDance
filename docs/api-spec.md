@@ -83,8 +83,8 @@ ID 표기: 아래 예시의 `"1"`, `"p_001"` 등은 가독성을 위한 단순�
 
 | Method | Endpoint | 설명 | 요청 (Query/Body) | 응답 |
 |---|---|---|---|---|
-| GET | `/problems` | 문제 목록 조회 | Query: `?page=1&page_size=20` | 200 `{"items": [{"problem_id": 1, "title": "Welcome to AtCoder", "source": "codenet_atcoder", "created_at": "2026-07-01T00:00:00Z"}], "page": 1, "page_size": 20, "total": 128}` |
-| GET | `/problems/{problem_id}` | 문제 상세 조회 | - | 200 `{"problem_id": 1, "title": "Welcome to AtCoder", "statement": "You are given...", "constraints": "1<=a,b,c<=1000", "examples": [{"input": "1\n2 3\ntest", "output": "6 test"}], "source": "codenet_atcoder", "external_id": "practice_1", "created_at": "2026-07-01T00:00:00Z"}` |
+| GET | `/problems` | 문제 목록 조회 | Query: `?page=1&page_size=20` | 200 `{"items": [{"problem_id": 1, "title": "Welcome to AtCoder"}], "page": 1, "page_size": 20, "total_count": 128}` |
+| GET | `/problems/{problem_id}` | 문제 상세 조회 | - | 200 `{"problem_id": 1, "title": "Welcome to AtCoder", "statement": "You are given...", "constraints": "1<=a,b,c<=1000", "examples": [{"input": "1\n2 3\n", "output": "6"}], "source": "codenet_atcoder"}` |
 
 **GET /problems** 요청 쿼리:
 | 키 | 타입 | 필수 | 예시 | 설명 |
@@ -98,11 +98,9 @@ ID 표기: 아래 예시의 `"1"`, `"p_001"` 등은 가독성을 위한 단순�
 | items | array\<object\> | 아래 참고 | |
 | items[].problem_id | integer | `1` | |
 | items[].title | string | `"Welcome to AtCoder"` | |
-| items[].source | string | `"codenet_atcoder"` | 고정값 (현재 소스가 하나뿐) |
-| items[].created_at | string (ISO8601) | `"2026-07-01T00:00:00Z"` | |
 | page | integer | `1` | |
 | page_size | integer | `20` | |
-| total | integer | `128` | 전체 문제 수 |
+| total_count | integer | `128` | 전체 문제 수 |
 
 > `difficulty`, `tags` 필터는 CodeNet 메타데이터 확정 후 쿼리 파라미터로 추가 (하위호환 추가)
 
@@ -114,11 +112,9 @@ ID 표기: 아래 예시의 `"1"`, `"p_001"` 등은 가독성을 위한 단순�
 | statement | string | `"You are given..."` | 라이선스 검토 전까지 원문 노출 여부 재검토 (`CLAUDE.md` 참고) |
 | constraints | string \| null | `"1<=a,b,c<=1000"` | |
 | examples | array\<object\> | `[{"input": "1\n2 3\ntest", "output": "6 test"}]` | |
-| examples[].input | string | `"1\n2 3\ntest"` | |
-| examples[].output | string | `"6 test"` | |
+| examples[].input | string | `"1\n2 3\n"` | |
+| examples[].output | string | `"6"` | |
 | source | string | `"codenet_atcoder"` | |
-| external_id | string | `"practice_1"` | CodeNet/AtCoder 원본 문제 ID |
-| created_at | string (ISO8601) | `"2026-07-01T00:00:00Z"` | |
 
 에러: 404 `{"error": {"code": "PROBLEM_NOT_FOUND", "message": "문제를 찾을 수 없습니다."}}`
 
