@@ -14,8 +14,9 @@ CREATE TABLE users (
 );
 
 -- 문제 (CodeNet의 AtCoder 문제 중 풀이기록 있는 것만 시딩)
+-- api-spec.md: problem_id는 integer (UUID 아님)
 CREATE TABLE problems (
-  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  id            BIGSERIAL PRIMARY KEY,
   source        TEXT NOT NULL DEFAULT 'codenet_atcoder',
   external_id   TEXT NOT NULL,                  -- CodeNet/AtCoder 원본 문제 ID
   title         TEXT NOT NULL,
@@ -31,7 +32,7 @@ CREATE TABLE problems (
 CREATE TABLE sessions (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id       UUID NOT NULL REFERENCES users(id),
-  problem_id    UUID NOT NULL REFERENCES problems(id),
+  problem_id    BIGINT NOT NULL REFERENCES problems(id),
   language      TEXT NOT NULL,
   started_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   ended_at      TIMESTAMPTZ,
@@ -55,7 +56,7 @@ CREATE TABLE submissions (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   session_id    UUID NOT NULL REFERENCES sessions(id),
   user_id       UUID NOT NULL REFERENCES users(id),
-  problem_id    UUID NOT NULL REFERENCES problems(id),
+  problem_id    BIGINT NOT NULL REFERENCES problems(id),
   code          TEXT NOT NULL,
   language      TEXT NOT NULL,
   status        TEXT NOT NULL DEFAULT 'pending',  -- 'pending' | 'judged' (채점 엔진 착수 후 세분화)

@@ -2,14 +2,18 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.model import user
+from app.model import problem
 
 from app.api import auth
+from app.api import problem as problem_api
 from app.database import Base, engine, SessionLocal
 Base.metadata.create_all(engine)
 app = FastAPI(
     title="LinguaAI",
     version="0.1.0",
 )
+
+auth.install_error_handler(app)
 
 app.add_middleware(
     CORSMiddleware,
@@ -19,6 +23,7 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
+app.include_router(problem_api.router)
 
 @app.get("/")
 def read_root():
