@@ -5,7 +5,7 @@
 | 이름 | GitHub | 역할 |
 |---|---|---|
 | 이재준 | dannyiscard |  |
-| 임유빈 | |  |
+| 임유빈 |  |  |
 
 ---
 
@@ -27,11 +27,11 @@
 ### 필수 기능
 
 - [이메일을 통한 회원가입 및 로그인]
-
+- [PS 문제들에 대한 접근 및 풀이]
+- [내가 푼 문제들에 대한 기록]
+- [내 풀이에 대한 자세한 사후 피드백]
 
 ### 선택 기능
-
-- []
 
 
 ## IA 및 화면 설계서
@@ -49,15 +49,16 @@
 ## API 문서
 
 > API 주소, 요청 방식, 요청값, 응답값, 에러 상황을 정리
->
-> 아래 명세는 실제 실행 중인 백엔드(로컬 테스트 DB 기준)에 대해 각 엔드포인트를 직접 호출해 응답을 확인한 뒤 작성했습니다.
-
-### 공통 사항
 
 ### 인증 (`app/api/auth.py`)
 
-| Method | Endpoint | 설명 | 인증 필요 |
-|---|---|---|:---:|
+| Method | Endpoint | 설명 | 요청 (Body) | 응답 |
+|---|---|---|---|---|
+| POST | `/auth/signup` | 회원가입 | {"email": "example@example.com", "nickname": "example001", "password": "test12345"} | 201 {"user_id": "1", "nickname": "example001", "email": "example@example.com", "profile_img": null} |
+| POST | `/auth/login` | 로그인, access/refresh 토큰 발급 | {"email": "example@example.com", "password": "test12345"} | 200 {"access_token": "\<jwt>", "refresh_token": "\<jwt>", "token_type": "bearer"} |
+| POST | `/auth/refresh` | refresh token으로 access token 재발급 | {"refresh_token": "\<jwt>"} | 200 {"access_token": "\<jwt>", "token_type": "bearer"} |
+| POST | `/auth/logout` | 서버에 저장된 refresh token 폐기 | {"refresh_token": "\<jwt>"} | 200 {"message": "로그아웃 하였습니다."} |
+
 
 ---
 
