@@ -145,24 +145,48 @@ ID 표기: `problem_id`는 `db-schema.md`의 `problems.id`(BIGSERIAL) 그대로 
 응답 공통 필드(세 엔드포인트): `session_id`(string), `user_id`(string), `problem_id`(integer), `started_at`(string, ISO8601), `ended_at`(string\|null), `status`(string enum: `"active"`\|`"solved"`\|`"abandoned"`)
 
 ---
+// keystroke-analysis-dev-plan.md와 같이 읽어야 이해하기 쉬움.
+## 실시간 이벤트 수집 (Ingest Gateway) — 확정
 
-## 실시간 이벤트 수집 (Events) — 제너릭 통로만 확정, 세부 스키마는 미확정
+`keystroke-analysis-dev-plan.md` §2~3 반영. 에디터 편집 연산(EditOp) 스키마가 확정되어(`backend/app/schema/analysis.py`) 더 이상 자유 페이로드가 아님. 게이트웨이는 스키마 검증·`(sid, seq)` 중복 제거·인증만 수행하고, AST 파싱 등 무거운 연산은 하지 않는다(Replay Worker가 세션 종료 후 비동기로 수행 — 아래 "키스트로크 분석" 섹션 참고).
 
-| Method | Endpoint | 설명 | 요청 (Body) | 응답 |
+| Method | Endpoint | 설명 | 방향 | 응답 |
 |---|---|---|---|---|
-| WS | `/ws/events?session_id={id}&token={access_token}` | 실시간 행동 로그 스트리밍 | `{"session_id": "s_001", "events": [{"type": "edit_snapshot", "payload": {"char_count": 42}, "ts": 1753333200000}]}` | 없음 (ack 미사용) |
-| POST | `/events/beacon` | WS 불가/탭 종료 시 폴백 전송 | 위와 동일 | 204 (본문 없음) |
+| WS | `/ws/events?session_id={id}&token={access_token}` | 편집 로그 실시간 스트리밍 | Client→Server 5종 메시지 (아래) | Server→Client 3종 메시지 (아래) |
+| POST | `/events/beacon` | WS 불가/탭 종료 시 폴백 전송 | `edit.batch`와 동일 payload | 204 (본문 없음) |
 
-요청 필드:
+**Client → Server 메시지** (공통 필드: `type`, `sid`):
+
+| type | 추가 필드 | 설명 |
+|---|---|---|
+| `session.start` | `problem_id`(integer), `lang`(string), `client_ts`(integer, Unix ms), `editor`(string, 예: `"monaco@0.45"`), `initial_code`(string) | 세션 시작. `client_ts`는 서버-클라 시계 드리프트 보정용 |
+| `edit.batch` | `seq`(integer), `base_t`(integer, 배치 첫 이벤트 상대 ms), `ops`(array\<EditOp\>) | 주 트래픽. 1000ms 주기 또는 버퍼 200개/제출 직전/unload 시 강제 플러시 |
+| `session.heartbeat` | `t`(integer), `cursor`(integer, 코드포인트 오프셋) | 5초 주기, 편집 없어도 전송. 90초간 미수신 시 서버가 `reason: "timeout"`으로 세션 강제 종료 |
+| `submission.mark` | `t`(integer), `submission_id`(string) | 제출 시각 마킹. `AnalysisResult`의 phase 분리·`submission_ts_ms` 기준점 |
+| `session.end` | `t`(integer), `reason`(string enum: `"submitted_ac"`\|`"closed"`\|`"timeout"`) | 세션 종료. 이 시점에 Replay Worker 큐 적재 트리거 |
+
+**EditOp** (`ops` 배열 원소, `backend/app/schema/analysis.py`의 `EditOp`와 동일):
 | 키 | 타입 | 필수 | 예시 | 설명 |
 |---|---|---|---|---|
-| session_id | string | O | `"s_001"` | |
-| events | array\<object\> | O | 아래 참고 | |
-| events[].type | string | O | `"edit_snapshot"` | 자유 문자열, 추후 enum으로 제한 예정 |
-| events[].payload | object | O | `{"char_count": 42}` | 자유 JSON, 팀A 산출물 확정 후 구조 확정 |
-| events[].ts | integer (Unix ms) | O | `1753333200000` | |
+| t | integer | O | `1200` | 세션 시작 기준 상대 ms |
+| op | integer (0\|1) | O | `0` | `0`=insert, `1`=delete |
+| pos | integer | O | `42` | 코드포인트 기준 절대 오프셋 |
+| len | integer | X (기본 0) | `1` | delete 길이 |
+| txt | string | X (기본 `""`) | `"int"` | insert 문자열. IME 조합 중간 상태는 기록하지 않고 `compositionend` 확정 문자열만 하나의 insert로 기록 |
+| src | string (enum) | X (기본 `"user"`) | `"user"` | `"user"` \| `"autoindent"` \| `"autocomplete"`. 워커는 `src != "user"`를 pause 계산에서 제외 |
 
-> **확장 예정**: `type` 값 목록과 `payload`의 구체 스키마는 팀A의 "풀이 과정 구조화" 산출물 확정 후 정의됩니다. 현재는 서버가 값을 검증하지 않고 그대로 저장만 합니다 (`db-schema.md`의 `events` 테이블 참고).
+> undo/redo는 `op: 2`(별도 타입)로 기록 예정이나 **현재 Replay Worker 미구현**(dev-plan §11.1 결정사항: pivot 판정에서 제외). 프런트가 `op: 2`를 보내도 워커는 아직 무시한다 — 구현 전까지는 undo를 역방향 insert/delete 이벤트로 풀어서 보내는 임시 방편을 권장.
+
+**Server → Client 메시지**:
+| type | 필드 | 설명 |
+|---|---|---|
+| `ack` | `sid`, `seq`(integer) | 수신 확인, 최대 수신 seq |
+| `resume` | `sid`, `last_seq`(integer) | 재연결 시 마지막 수신 seq 응답 |
+| `error` | `sid`, `code`(string), `seq`(integer) | 예: `"SCHEMA_INVALID"` |
+
+**멱등성 계약**: 서버는 `(sid, seq)`로 중복 제거. 클라이언트는 `ack` 미수신 배치를 동일 `seq`로 재전송해야 하며, seq를 재사용해 다른 내용을 보내면 안 됨.
+
+> **미구현 (Ingest Gateway 도입 전 임시)**: 현재 백엔드는 WS 게이트웨이가 없고, 프런트가 세션 종료 시 `events` 배열을 `POST /sessions/{session_id}/analysis`(아래 참고)로 한 번에 올리는 동기 경로로 대체 운용 중. 게이트웨이 도입 시 그 엔드포인트는 조회 전용으로 축소되고 위 WS 프로토콜로 완전히 이전한다 — 필드 구조(EditOp)는 이미 동일하므로 프런트 파싱 로직 변경은 최소화된다.
 
 ---
 
@@ -193,6 +217,53 @@ ID 표기: `problem_id`는 `db-schema.md`의 `problems.id`(BIGSERIAL) 그대로 
 | submitted_at | string (ISO8601) | `"2026-07-24T05:09:00Z"` | |
 
 > 현재는 접수 즉시 mock으로 `status: "pending"`을 고정 반환합니다.
+
+---
+// keystroke-analysis-dev-plan.md와 같이 읽어야 이해하기 쉬움.
+## 키스트로크 분석 (Analysis) — 확정
+
+`keystroke-analysis-dev-plan.md` §4 Replay Worker 산출물 조회. **최종 형태(게이트웨이 도입 후)는 조회 전용**: `session.end` 수신 시 게이트웨이가 큐에 적재하고 Replay Worker가 비동기로 세션당 1회 처리·저장하면, 프런트는 결과만 폴링해서 가져온다.
+
+| Method | Endpoint | 설명 | 응답 |
+|---|---|---|---|
+| GET | `/sessions/{session_id}/analysis` | 분석 결과 조회 | 200(완료) / 202(처리 중, 아래) / 404 |
+
+202 응답(처리 중): `{"status": "processing"}` — 프런트는 수 초 간격으로 재조회(폴링) 권장.
+
+**200 응답**:
+| 키 | 타입 | 예시 | 설명 |
+|---|---|---|---|
+| session_id | string | `"s_001"` | |
+| result.analysis_level | string (enum) | `"full"` | `"full"` \| `"timing_only"`(미지원 언어/파서 불가) \| `"degraded"`(이벤트 수 K<50 부족) |
+| result.matcher_version | integer | `1` | 패턴 매처 버전. 버전업 시 과거 세션은 raw blob에서 재처리(백필) 대상(dev-plan §11.5) |
+| result.total_ms / setup_ms / formation_ms / debug_ms / refine_ms | integer | `60000` | phase별 소요 ms |
+| result.keystroke_count | integer | `842` | |
+| result.pause_total_ms / pause_count | integer | `12000` / `4` | |
+| result.pivot_count | integer | `2` | |
+| result.code_bytes | integer | `530` | |
+| result.final_code | string | `""` | 재생 재구성 코드 전문. **조회 API에서는 항상 `""`** — 코드 전문은 개인정보(로그인 정보 등)와 분리 보관 원칙상 파생 테이블에 저장하지 않음(M1 바이트 일치 검증은 내부 검증 도구가 raw blob 대상으로 별도 수행, 공개 API 계약 아님) |
+| result.pauses[] | array\<object\> | 아래 참고 | |
+| result.pauses[].event_index | integer | `-1` | 파생 테이블에는 원본 이벤트 미보관 — 항상 `-1` |
+| result.pauses[].t_ms / duration_ms | integer | `18000` / `2200` | |
+| result.pauses[].ast_label | string | `"BRANCH_CONDITION"` | `INTERFACE_DESIGN`\|`LOOP_BOUNDARY`\|`BRANCH_CONDITION`\|`INDEX_REASONING`\|`ALGORITHM_ENTRY`\|`SETUP`\|`SYNTAX_STRUGGLE` |
+| result.pauses[].pattern | string | `"BFS"` | 귀속된 구조 패턴, 없으면 `""` |
+| result.pauses[].phase | string | `"FORMATION"` | `"SETUP"`\|`"FORMATION"`\|`"DEBUG"`\|`"REFINE"` |
+| result.pivots[] | array\<object\> | 아래 참고 | |
+| result.pivots[].start_index / end_index / rewrite_horizon | integer | `-1` | 위와 동일 이유로 항상 `-1` |
+| result.pivots[].t_ms / deleted_chars | integer | `30000` / `55` | |
+| result.pivots[].pivot_type | string | `"APPROACH_SWITCH"` | `"APPROACH_SWITCH"`\|`"COMPLEXITY_FIX"`\|`"EDGE_CASE_FIX"`\|`"OTHER"` (`"TYPO"`는 노이즈로 제외되어 나타나지 않음) |
+| result.pivots[].pattern | string | `"BFS"` | |
+| result.pattern_windows[] | array\<object\> | 아래 참고 | 패턴별 형성 구간(dev-plan §4.1 Step 6) |
+| result.pattern_windows[].pattern | string | `"BFS"` | |
+| result.pattern_windows[].t_start_ms / t_complete_ms / formation_ms | integer | `8000` / `19500` / `11500` | |
+| result.pattern_windows[].pause_ms_in_window / pivot_count_in_window | integer | `2200` / `1` | |
+| result.patterns_detected | array\<string\> | `["BFS", "DP"]` | 지원 패턴: `BFS`,`DFS_RECURSIVE`,`DFS_ITERATIVE`,`BINARY_SEARCH`,`DP`,`GREEDY`,`DSU` (cpp/python만 지원, 그 외 언어는 항상 `[]`) |
+
+에러: 404 `{"error": {"code": "SESSION_NOT_FOUND", "message": "세션을 찾을 수 없습니다."}}` / 403 `{"error": {"code": "FORBIDDEN", "message": "접근 권한이 없습니다."}}`
+
+> **확장 예정**: `pattern`/`pivot_type` 값 목록은 팀A의 CodeNet 구조화 산출물과 무관한 독립 매처(dev-plan §4.1 Step 5~6) 결과이며, 매처 버전업 시 값 목록이 늘어날 수 있음(하위호환 추가). `tier`(A~G) 기반 기준선 대비 잔차 백분위(dev-plan §5)는 미구현이라 이 응답에 포함되지 않음 — 확정되는 대로 이 섹션에 필드 추가 예정.
+
+> **미구현 (Ingest Gateway 도입 전 임시)**: 현재는 위 WS 게이트웨이가 없으므로 `POST /sessions/{session_id}/analysis` (요청 body: `{"lang": "cpp", "events": [EditOp, ...], "submission_ts_ms": [45000]}`)로 프런트가 이벤트 배열을 직접 올리면 서버가 동기적으로 재생·분석·저장하고 200 응답에 `result`를 즉시 반환한다(이 임시 경로에서만 `final_code`가 채워져 프런트 M1 바이트 검증에 쓰인다). 게이트웨이 도입 시 이 POST는 제거되고 위 GET 전용 계약으로 완전히 이전한다.
 
 ---
 
