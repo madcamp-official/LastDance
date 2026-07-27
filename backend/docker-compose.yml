@@ -23,8 +23,19 @@ services:
   backend:
     build: ./backend
     restart: unless-stopped
-    env_file: ./backend/.env
     expose: ["8000"]
+  
+  
+  #frontend:
+  #  build: ./frontend
+  #  restart: unless-stopped
+  #  expose: ["3000"]
+  nginx:
+    image: nginx:alpine
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./nginx:/etc/nginx/conf.d
+    depends_on: [backend, frontend]
 
   # 나중에 프론트엔드 추가 시 여기에 서비스 추가
   # frontend:
