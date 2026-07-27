@@ -92,11 +92,7 @@ services:
       - ./nginx:/etc/nginx/conf.d
     depends_on: [backend, frontend]
 
-  # 나중에 프론트엔드 추가 시 여기에 서비스 추가
-  # frontend:
-  #   build: ./frontend
-  #   restart: unless-stopped
-  #   expose: ["3000"]
+
 
 volumes:
   redis_data:
