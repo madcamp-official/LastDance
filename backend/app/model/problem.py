@@ -12,3 +12,6 @@ class Problem(Base):
     constraints = Column(String, nullable=True)
     examples = Column(JSON, nullable=True)  # [{"input": "...", "output": "..."}]
     source = Column(String, nullable=True)
+    # AtCoder_100/{testcase_dir}/io/testcases.csv 채점용 폴더명(예: "p02537"). 공개 API에는 노출 안 함
+    # (api-spec.md ProblemDetailResponse에는 없는 내부 전용 필드 — app/schema/problem.py에도 추가하지 않음).
+    testcase_dir = Column(String, nullable=True)

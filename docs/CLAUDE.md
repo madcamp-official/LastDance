@@ -13,12 +13,13 @@ IBM Project CodeNet 데이터셋에서 **풀이 기록(제출 이력)이 확보�
 - **팀원A**: 백엔드 담당
 - **팀원B(이 저장소 작업자)**: 프론트엔드 담당
 
-**변경 사항**: CodeNet 데이터 다운로드가 예상보다 오래 걸려서, 원래 A가 전담하려던 "CodeNet 전처리 → Claude로 풀이 과정/오류 수정 패턴 구조화 → Qwen 프롬프트 설계"는 **채점 엔진 구현**과 함께 보류 TODO로 내렸습니다. 데이터 다운로드가 끝나는 시점에 이 두 가지를 팀이 다시 분업합니다(누가 무엇을 맡을지는 그때 결정 — 지금 확정하지 않음).
+**변경 사항**: CodeNet 데이터 다운로드가 예상보다 오래 걸려서, 원래 A가 전담하려던 "CodeNet 전처리 → Claude로 풀이 과정/오류 수정 패턴 구조화 → Qwen 프롬프트 설계"는 보류 TODO로 내렸습니다. 데이터 다운로드가 끝나는 시점에 팀이 분업합니다(누가 무엇을 맡을지는 그때 결정 — 지금 확정하지 않음).
+
+**2026-07-27 갱신**: 채점 엔진(항목 3)은 팀 분업 대기와 무관하게, AtCoder_100 testcase.csv 기반 채점이 필요해져 **먼저 착수·구현 완료**했습니다(자체 호스팅 Judge0 경유, 아래 "중요 미해결 항목" 1번 참고). 나머지 두 항목(전처리→프롬프트 설계)은 여전히 보류입니다.
 
 **보류 TODO (데이터 다운로드 완료 후 착수, 분업 미정)**
 1. CodeNet 전처리 → Claude(강한 모델)로 풀이 과정/오류 수정 패턴 구조화
 2. 위 구조화 결과 기반 Qwen 프롬프트 설계
-3. 채점 엔진 구현 (Judge0 연동 또는 자체 구현 — 아래 "중요 미해결 항목" 참고)
 
 그 전까지 A(백엔드)/B(프론트엔드)는 아래 "지금 진행 가능한 작업"만 각자 진행합니다. **회원가입 같은 기능이 대표적인 예시입니다 — "풀이 과정 구조화"나 "사용자 데이터 수집 항목"이 뭐가 되든 전혀 영향받지 않는 영역이기 때문입니다.**
 
@@ -30,13 +31,14 @@ IBM Project CodeNet 데이터셋에서 **풀이 기록(제출 이력)이 확보�
 | 코드 에디터: Monaco Editor (자체 통합) | 확정 |
 | 실시간 로그 전송 계층 (`activity-logger.ts`, `useMonacoActivityLogger.ts`) | 구현 완료 (전송 방식만. 수집 항목명은 임시) |
 | 팀 역할 분담 | A=백엔드, B=프론트엔드로 확정 |
-| CodeNet 전처리 → 프롬프트 설계, 채점 엔진 구현 | **보류** — 데이터 다운로드 완료 후 착수 |
+| CodeNet 전처리 → 프롬프트 설계 | **보류** — 데이터 다운로드 완료 후 착수 |
+| 채점 엔진 구현 (Judge0 경유) | 구현 완료 (`backend/app/judge`, `backend/docker-compose.yml`의 `judge0-*`) |
 | 수집 항목의 정확한 필드/이벤트 목록 | 미확정 |
 | 백엔드-프론트엔드 API 명세, DB 스키마 (현재 확정 가능한 범위) | `docs/api-spec.md`, `docs/db-schema.md` 참고 — 확장 가능하게 설계됨 |
 
 ## 중요 미해결 항목 (팀 논의 필요, Claude Code가 임의로 확정하면 안 됨)
 
-1. **코드 실행/채점 엔진**: 사용자가 제출한 코드를 실제로 실행해 CodeNet 테스트케이스와 비교 채점해야 합니다. **Judge0**(오픈소스, REST API, 60개 이상 언어, Docker 기반 샌드박스)를 1순위 후보로 검토 중이나, 착수는 데이터 다운로드 완료 후입니다. Judge0는 과거 샌드박스 이스케이프 취약점(CVE-2024-29021 등)이 보고된 바 있어, 자체 호스팅 시 최신 버전+네트워크 격리 확인 또는 호스팅형 티어 사용을 검토해야 합니다. **사용자 코드를 백엔드에서 직접 eval/exec 하는 방식은 절대 금지.**
+1. **코드 실행/채점 엔진**: **구현 완료.** 사용자가 제출한 코드를 Judge0(자체 호스팅, `backend/docker-compose.yml`의 `judge0-server`/`judge0-workers`, 이미지 `judge0/judge0:1.13.1`)로 실행해 `AtCoder_100/{problems.source}/io/testcases.csv`와 비교 채점합니다(`backend/app/judge`, `POST /submissions`). 백엔드는 여전히 사용자 코드를 직접 eval/exec 하지 않고 전부 Judge0 경유. **미확인 채로 남은 것**: Judge0의 과거 샌드박스 이스케이프 취약점(CVE-2024-29021 등) 대응 — 배포 전 실제 운용 버전 패치 여부와 네트워크 격리 설정을 팀이 별도로 점검해야 함.
 2. **CodeNet 데이터셋 라이선스**: 문제 지문을 CodeNet에서 그대로 가져와 서비스에 노출해도 되는지(AtCoder 원 저작권 vs CodeNet 재배포 라이선스 조건)를 법무 검토 전까지 확정하지 않습니다.
 
 ## 기술 스택
@@ -45,10 +47,13 @@ IBM Project CodeNet 데이터셋에서 **풀이 기록(제출 이력)이 확보�
 |---|---|---|
 | 코드 에디터 | Monaco Editor | 공식 API 사용, 리버스엔지니어링 불필요 |
 | 실시간 로그 전송 | WebSocket + sendBeacon 폴백 | `frontend/lib/activity-logger.ts` |
-| 코드 실행/채점 | Judge0 (검토 중, 착수 보류) | 위 "중요 미해결 항목" 참고 |
+| 코드 실행/채점 | Judge0 (자체 호스팅, 구현 완료) | 위 "중요 미해결 항목" 참고. `backend/app/judge`, `JUDGE0_URL` |
 | 로컬 LLM 서빙 | Ollama + Qwen | 프롬프트 내용은 보류 TODO. 통신 레이어는 지금 mock으로 구현 가능 |
-| 백엔드 프레임워크 | 미확정 (팀 확정 필요) | 결정되는 대로 이 문서 갱신 |
-| DB | PostgreSQL (가정, 스키마는 `docs/db-schema.md` 참고) | |
+| 백엔드 프레임워크 | FastAPI | `backend/app` |
+| DB | SQLite(로컬 개발, `DATABASE_URL`) / PostgreSQL(운영 가정) | 스키마는 `docs/db-schema.md` 참고 |
+| Ingest Gateway 중복 제거 | Redis (`redis.asyncio`) | `(sid, seq)` last_seq, TTL 24h. `backend/app/util/messaging.py` |
+| Ingest Gateway 이벤트 로그 | Kafka (`aiokafka`), 토픽 `keystroke-events`, 파티션 키=`sid` | Replay Worker는 별도 서비스가 아니라 백엔드 프로세스 내 Kafka consumer(`backend/app/worker/consumer.py`)로 구현. 로컬 개발용 Redis/Kafka는 `backend/docker-compose.yml` |
+| Raw 이벤트 blob 저장 | 로컬 디스크 (`RAW_STORE_DIR`, zstd 압축) | S3 대신 로컬 VM 서버 운용 전제로 대체(dev-plan §3.3) |
 
 ## 디렉토리 구조 (제안)
 
@@ -66,7 +71,7 @@ IBM Project CodeNet 데이터셋에서 **풀이 기록(제출 이력)이 확보�
 /backend
   /src
     /api        # REST/WebSocket 핸들러
-    /judge      # Judge0 클라이언트 래퍼 (착수 보류, 인터페이스만 정의 가능)
+    /judge      # Judge0 클라이언트 래퍼 (구현 완료 — 실제 경로는 backend/app/judge)
     /llm        # Ollama/Qwen 클라이언트 래퍼 (mock 프롬프트로 통신 레이어만 우선 구현)
     /db         # 스키마/마이그레이션 — docs/db-schema.md 기준
 /docs
@@ -89,7 +94,7 @@ IBM Project CodeNet 데이터셋에서 **풀이 기록(제출 이력)이 확보�
 3. **문제 카탈로그 API** — `/problems`, `/problems/:id` 구현. CodeNet 전체 다운로드를 기다리지 않고, 먼저 받아진 일부 표본 문제로 `problems` 테이블 시딩 스크립트를 미리 검증
 4. **세션 라이프사이클 API** — `/sessions` 생성/종료. 이벤트 스키마와 무관하게 세션 시작~종료 시각과 상태만 다룸
 5. **이벤트 수집 백엔드 (제너릭 인제스천)** — WebSocket 서버(`/ws/events`)에서 배치를 받아 `event_type`/`payload` 검증 없이 그대로 `events` 테이블에 적재. sendBeacon 폴백용 `POST /events/beacon`도 함께
-6. **제출(Submission) API 뼈대** — `/submissions` 생성/조회. 실제 채점은 보류이므로, 접수 즉시 mock verdict(`"PENDING"` 고정 등)를 반환하도록 스텁 처리해 프론트 연동부터 검증
+6. **제출(Submission) API** — `/submissions` 생성/조회. **구현 완료**: Judge0 경유로 동기 채점하며, AC면 세션을 자동 종료, 그 외에는 세션을 유지한 채 제출 기록만 남김(`backend/app/api/submission.py`)
 7. **LLM 통신 레이어 뼈대** — `/feedback` 접수 → Ollama에 mock 프롬프트를 보내고 응답을 그대로 반환. 실제 프롬프트는 보류 TODO 완료 후 교체
 8. **테스트/문서화** — 엔드포인트별 기본 통합 테스트, OpenAPI 스펙 자동 생성 세팅
 
@@ -111,8 +116,8 @@ IBM Project CodeNet 데이터셋에서 **풀이 기록(제출 이력)이 확보�
 
 ## Claude Code에게: 작업 시 유의사항
 
-- "보류 TODO" 3가지(전처리→프롬프트 설계, 채점 엔진 구현)는 데이터 다운로드 완료 전까지 착수하지 않습니다. 관련 인터페이스(예: judge 클라이언트, llm 클라이언트)는 정의해도 되지만 실제 로직은 mock으로만 채웁니다.
+- "보류 TODO" 2가지(전처리→프롬프트 설계)는 데이터 다운로드 완료 전까지 착수하지 않습니다. `llm` 클라이언트는 인터페이스만 정의하고 실제 로직은 mock으로만 채웁니다. (채점 엔진은 2026-07-27에 팀 지시로 먼저 구현 완료 — 더 이상 보류 아님.)
 - API 명세와 DB 스키마는 `docs/api-spec.md`, `docs/db-schema.md`에 명시된 "확정 범위"만 구현하고, "확장 예정" 표시가 된 부분은 임의로 필드를 채워 넣지 않습니다.
-- 사용자 코드 실행은 반드시 Judge0(또는 동급 샌드박스) 경유 예정. 채점 엔진 착수 전까지는 백엔드에서 어떤 형태로든 사용자 코드를 직접 실행하지 않습니다(mock 응답만 반환).
+- 사용자 코드 실행은 반드시 Judge0(또는 동급 샌드박스) 경유. 백엔드에서 어떤 형태로든 사용자 코드를 직접 eval/exec 하지 않습니다(구현: `backend/app/judge`).
 - 수집 로그에는 사용자가 작성한 코드 전문이 포함될 수 있으므로, 저장/전송 시 로그인 정보(이메일 등 개인정보)와 분리 보관.
 - 새로운 기술 선택(프레임워크, 라이브러리, 인프라)은 이 문서의 "미확정" 항목에 걸쳐 있다면 임의로 확정하지 말고, 이 문서에 "검토 후보"로 남긴 뒤 팀 확인을 받습니다.

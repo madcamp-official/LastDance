@@ -190,13 +190,13 @@ ID 표기: `problem_id`는 `db-schema.md`의 `problems.id`(BIGSERIAL) 그대로 
 
 ---
 
-## 제출 (Submissions) — 접수 인터페이스만 확정, 채점 로직 보류
+## 제출 (Submissions) — Judge0 연동, 동기 채점
 
 | Method | Endpoint | 설명 | 요청 (Body) | 응답 |
 |---|---|---|---|---|
-| POST | `/submissions` | 코드 제출 접수 | `{"session_id": "s_001", "problem_id": 1, "code": "print('hello')", "language": "python3"}` | 202 `{"submission_id": "sub_001", "status": "pending", "submitted_at": "2026-07-24T05:09:00Z"}` |
-| GET | `/submissions/{submission_id}` | 제출 상태/결과 조회 | - | 200 `{"submission_id": "sub_001", "status": "pending", "verdict": null, "runtime_ms": null, "memory_kb": null, "submitted_at": "2026-07-24T05:09:00Z"}` |
-| GET | `/submissions?session_id={id}` | 세션의 제출 이력 조회 | - | 200 `{"items": [{"submission_id": "sub_001", "status": "pending", "verdict": null, "submitted_at": "2026-07-24T05:09:00Z"}]}` |
+| POST | `/submissions` | 코드 제출 + 즉시 채점 | `{"session_id": "s_001", "problem_id": 1, "code": "print('hello')", "language": "python3"}` | 200 `{"submission_id": "sub_001", "status": "judged", "submitted_at": "2026-07-24T05:09:00Z"}` |
+| GET | `/submissions/{submission_id}` | 제출 상태/결과 조회 | - | 200 `{"submission_id": "sub_001", "status": "judged", "verdict": "AC", "runtime_ms": 120, "memory_kb": 9600, "submitted_at": "2026-07-24T05:09:00Z"}` |
+| GET | `/submissions?session_id={id}` | 세션의 제출 이력 조회 | - | 200 `{"items": [{"submission_id": "sub_001", "status": "judged", "verdict": "AC", "submitted_at": "2026-07-24T05:09:00Z"}]}` |
 
 **POST /submissions** 요청:
 | 키 | 타입 | 필수 | 예시 |
@@ -210,13 +210,13 @@ ID 표기: `problem_id`는 `db-schema.md`의 `problems.id`(BIGSERIAL) 그대로 
 | 키 | 타입 | 예시 | 설명 |
 |---|---|---|---|
 | submission_id | string | `"sub_001"` | |
-| status | string (enum) | `"pending"` | `"pending"` \| `"judged"` (채점 엔진 착수 후 세분화) |
-| verdict | string \| null | `null` | 채점 엔진 착수 전까지 항상 null. 이후 `"AC"`\|`"WA"`\|`"TLE"`\|`"RE"`\|`"CE"` |
-| runtime_ms | integer \| null | `null` | |
-| memory_kb | integer \| null | `null` | |
+| status | string (enum) | `"judged"` | `POST` 호출 시점에 동기로 채점을 끝내고 저장하므로 항상 `"judged"`로 응답 |
+| verdict | string \| null | `"AC"` | `"AC"`\|`"WA"`\|`"TLE"`\|`"RE"`\|`"CE"` |
+| runtime_ms | integer \| null | `120` | 테스트케이스 전체 실행 시간 합. AC일 때만 값이 있고, 그 외에는 `null` |
+| memory_kb | integer \| null | `9600` | 테스트케이스 중 최대 메모리 사용량. AC일 때만 값이 있고, 그 외에는 `null` |
 | submitted_at | string (ISO8601) | `"2026-07-24T05:09:00Z"` | |
 
-> 현재는 접수 즉시 mock으로 `status: "pending"`을 고정 반환합니다.
+채점 구현: `backend/app/judge` (Judge0 자체 호스팅 경유, `backend/docker-compose.yml`의 `judge0-*` 서비스). 테스트케이스는 `AtCoder_100/{problems.source}/io/testcases.csv`에서 idx 순으로 읽어 첫 실패에서 채점을 중단한다. `POST /submissions`에서 verdict가 `"AC"`면 세션을 자동으로 `solved`로 종료하고, 그 외에는 세션을 `active`로 유지한 채 제출 기록만 남긴다(`PATCH /sessions/{id}`로 별도 종료 가능). 언어 매핑은 `backend/app/judge/languages.py` 참고.
 
 ---
 // keystroke-analysis-dev-plan.md와 같이 읽어야 이해하기 쉬움.
