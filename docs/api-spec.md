@@ -150,6 +150,8 @@ ID 표기: `problem_id`는 `db-schema.md`의 `problems.id`(BIGSERIAL) 그대로 
 
 `keystroke-analysis-dev-plan.md` §2~3 반영. 에디터 편집 연산(EditOp) 스키마가 확정되어(`backend/app/schema/analysis.py`) 더 이상 자유 페이로드가 아님. 게이트웨이는 스키마 검증·`(sid, seq)` 중복 제거·인증만 수행하고, AST 파싱 등 무거운 연산은 하지 않는다(Replay Worker가 세션 종료 후 비동기로 수행 — 아래 "키스트로크 분석" 섹션 참고).
 
+**구현 완료**: 게이트웨이는 `backend/app/api/ingest.py`. `(sid, seq)` 중복 제거는 Redis(last_seq, TTL 24h)로, Event Log는 Kafka(`aiokafka`, 토픽 `keystroke-events`, 파티션 키=`sid`)로 구현되어 있다. Replay Worker는 별도 프로세스가 아니라 같은 백엔드 안에서 도는 Kafka consumer(`backend/app/worker/consumer.py`)로, `session.end` 수신 시 그 세션 이벤트를 모아 재생·분석한다. Raw blob 저장(§3.3)은 S3 대신 로컬 VM 디스크(`RAW_STORE_DIR`, 기본 `./data/raw`)에 zstd 압축 저장한다. 로컬 개발용 Redis/Kafka는 `backend/docker-compose.yml`로 기동.
+
 | Method | Endpoint | 설명 | 방향 | 응답 |
 |---|---|---|---|---|
 | WS | `/ws/events?session_id={id}&token={access_token}` | 편집 로그 실시간 스트리밍 | Client→Server 5종 메시지 (아래) | Server→Client 3종 메시지 (아래) |
@@ -185,8 +187,6 @@ ID 표기: `problem_id`는 `db-schema.md`의 `problems.id`(BIGSERIAL) 그대로 
 | `error` | `sid`, `code`(string), `seq`(integer) | 예: `"SCHEMA_INVALID"` |
 
 **멱등성 계약**: 서버는 `(sid, seq)`로 중복 제거. 클라이언트는 `ack` 미수신 배치를 동일 `seq`로 재전송해야 하며, seq를 재사용해 다른 내용을 보내면 안 됨.
-
-> **미구현 (Ingest Gateway 도입 전 임시)**: 현재 백엔드는 WS 게이트웨이가 없고, 프런트가 세션 종료 시 `events` 배열을 `POST /sessions/{session_id}/analysis`(아래 참고)로 한 번에 올리는 동기 경로로 대체 운용 중. 게이트웨이 도입 시 그 엔드포인트는 조회 전용으로 축소되고 위 WS 프로토콜로 완전히 이전한다 — 필드 구조(EditOp)는 이미 동일하므로 프런트 파싱 로직 변경은 최소화된다.
 
 ---
 
@@ -263,7 +263,7 @@ ID 표기: `problem_id`는 `db-schema.md`의 `problems.id`(BIGSERIAL) 그대로 
 
 > **확장 예정**: `pattern`/`pivot_type` 값 목록은 팀A의 CodeNet 구조화 산출물과 무관한 독립 매처(dev-plan §4.1 Step 5~6) 결과이며, 매처 버전업 시 값 목록이 늘어날 수 있음(하위호환 추가). `tier`(A~G) 기반 기준선 대비 잔차 백분위(dev-plan §5)는 미구현이라 이 응답에 포함되지 않음 — 확정되는 대로 이 섹션에 필드 추가 예정.
 
-> **미구현 (Ingest Gateway 도입 전 임시)**: 현재는 위 WS 게이트웨이가 없으므로 `POST /sessions/{session_id}/analysis` (요청 body: `{"lang": "cpp", "events": [EditOp, ...], "submission_ts_ms": [45000]}`)로 프런트가 이벤트 배열을 직접 올리면 서버가 동기적으로 재생·분석·저장하고 200 응답에 `result`를 즉시 반환한다(이 임시 경로에서만 `final_code`가 채워져 프런트 M1 바이트 검증에 쓰인다). 게이트웨이 도입 시 이 POST는 제거되고 위 GET 전용 계약으로 완전히 이전한다.
+**구현 완료**: Ingest Gateway가 실제로 붙어(`backend/app/api/ingest.py`) 위 계약대로 GET 조회 전용으로 동작한다. `POST /sessions/{session_id}/analysis`(동기 임시 경로)는 제거됨.
 
 ---
 

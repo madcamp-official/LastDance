@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, status
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.api.auth import APIError
@@ -9,23 +10,20 @@ from app.model.analysis import (
     PivotEventRow,
     SessionSummary,
 )
+from app.model.ingest import IngestSessionState
 from app.model.session import Submission
 from app.model.user import User
 from app.schema.analysis import (
     AnalysisResult,
-    AnalyzeRequest,
     AnalyzeResponse,
     DeleteBurst,
     PatternWindowResult,
     PausePoint,
 )
 from app.util.security import get_current_user
-from app.worker.pipeline import analyze_session
-from app.worker.store import save_analysis
 
-# Ingest Gateway(§3)가 붙기 전까지의 임시 입구:
-# 프런트가 세션 종료 시 이벤트 배열을 통째로 올리면 동기적으로 분석·저장한다.
-# 게이트웨이/큐 도입 시 이 라우터는 조회 전용으로 축소된다.
+# 조회 전용: 분석 실행은 Ingest Gateway(app/api/ingest.py) + Replay Worker
+# (app/worker/consumer.py)가 session.end 수신 시 비동기로 수행한다(§3, §4).
 router = APIRouter(prefix="/sessions", tags=["analysis"])
 
 
@@ -38,34 +36,7 @@ def _load_owned_session(session_id: str, user_id: str, db: Session) -> Submissio
     return sub
 
 
-@router.post("/{session_id}/analysis", response_model=AnalyzeResponse)
-async def run_analysis(
-    session_id: str,
-    body: AnalyzeRequest,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    sub = _load_owned_session(session_id, current_user.user_id, db)
-
-    result = analyze_session(
-        events=body.events,
-        lang=body.lang,
-        submission_ts_ms=body.submission_ts_ms,
-    )
-    save_analysis(
-        db,
-        sid=session_id,
-        user_id=sub.user_id,
-        problem_id=sub.problem_id,
-        lang=body.lang,
-        result=result,
-    )
-    # 수집 로그(코드 전문)는 개인정보와 분리 보관 원칙 → DB에는 파생 피처만 저장.
-    # 응답의 final_code는 프런트가 M1 바이트 일치 검증에 쓰도록 1회성으로만 반환.
-    return AnalyzeResponse(session_id=session_id, result=result)
-
-
-@router.get("/{session_id}/analysis", response_model=AnalyzeResponse)
+@router.get("/{session_id}/analysis")
 async def get_analysis(
     session_id: str,
     db: Session = Depends(get_db),
@@ -75,6 +46,10 @@ async def get_analysis(
 
     summary = db.query(SessionSummary).filter(SessionSummary.sid == session_id).first()
     if not summary:
+        # Ingest Gateway가 세션을 받아 처리 중이면 202, 아예 시작된 적 없으면 404
+        state = db.query(IngestSessionState).filter(IngestSessionState.sid == session_id).first()
+        if state is not None and not state.ended:
+            return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content={"status": "processing"})
         raise APIError(status.HTTP_404_NOT_FOUND, "ANALYSIS_NOT_FOUND", "분석 결과가 없습니다.")
 
     pauses = db.query(PauseEventRow).filter(PauseEventRow.sid == session_id).all()
