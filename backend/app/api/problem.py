@@ -8,6 +8,7 @@ from app.schema.problem import (
     ProblemDetailResponse,
     ProblemListItem,
     ProblemListResponse,
+    ProblemStatsResponse,
 )
 
 router = APIRouter(prefix="/problems", tags=["problems"])
@@ -53,4 +54,21 @@ async def get_problem(problem_id: int, db: Session = Depends(get_db)):
         constraints=problem.constraints,
         examples=problem.examples or [],
         source=problem.source,
+    )
+
+
+@router.get("/{problem_id}/stats", response_model=ProblemStatsResponse)
+async def get_problem_stats(problem_id: int, db: Session = Depends(get_db)):
+    # 비교 통계 산출 로직 미확정 (api-spec.md 참고) — 엔드포인트만 예약.
+    problem = db.query(Problem).filter(Problem.problem_id == problem_id).first()
+    if not problem:
+        raise APIError(
+            status.HTTP_404_NOT_FOUND,
+            "PROBLEM_NOT_FOUND",
+            "문제를 찾을 수 없습니다.",
+        )
+
+    return ProblemStatsResponse(
+        problem_id=problem.problem_id,
+        message="비교 통계 기능은 아직 준비 중입니다.",
     )
