@@ -30,3 +30,9 @@ class ProblemDetailResponse(BaseModel):
     constraints: Optional[str] = None
     examples: List[Example] = []
     source: Optional[str] = None
+
+
+# ---- GET /problems/{problem_id}/stats (비교 통계, 미구현 — 자리표시자) ----
+class ProblemStatsResponse(BaseModel):
+    problem_id: int
+    message: str
