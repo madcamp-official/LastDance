@@ -26,6 +26,10 @@ _MOCK_MODEL = "qwen2.5-coder:7b"
 
 
 def _iso(dt: datetime) -> str:
+    # SQLite는 DateTime(timezone=True)라도 round-trip 후 tzinfo를 잃는다(naive가 됨).
+    # 이 컬럼은 항상 UTC로만 채워지므로 naive면 UTC로 간주.
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
     return dt.isoformat().replace("+00:00", "Z")
 
 
