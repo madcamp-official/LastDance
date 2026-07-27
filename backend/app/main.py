@@ -44,8 +44,8 @@ async def _stop_ingest_infra() -> None:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://languaai.madcamp-kaist.org",
-        "http://localhost:5173",  # 프론트엔드 로컬 개발 서버(Vite)
+        "https://codeback.madcamp-kaist.org",
+        "http://localhost:3000",  # 프론트엔드 로컬 개발 서버(Vite)
     ],
     allow_methods=["*"],
     allow_headers=["*"],
@@ -61,7 +61,7 @@ app.include_router(submission_api.router)
 
 @app.get("/")
 def read_root():
-    return {"Hello": "World"}
+    return {"Hello": "Codeback!"}
 
 
 @app.get("/items/{item_id}")
