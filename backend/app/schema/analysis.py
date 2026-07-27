@@ -1,6 +1,6 @@
-from typing import List, Literal, Optional, Tuple
+from typing import List, Literal, Tuple
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 # ---- 입력 이벤트 (dev-plan §2.1 EditOp) ----
@@ -70,13 +70,7 @@ class AnalysisResult(BaseModel):
     patterns_detected: List[str] = []
 
 
-# ---- POST /sessions/{session_id}/analysis (분석 실행) ----
-class AnalyzeRequest(BaseModel):
-    lang: str                               # "cpp", "python" 등 (미지원 언어는 timing_only)
-    events: List[EditOp]
-    submission_ts_ms: List[int] = []        # 제출 마킹 상대 시각 (§2.3 submission.mark)
-
-
+# ---- GET /sessions/{session_id}/analysis (분석 결과 조회) ----
 class AnalyzeResponse(BaseModel):
     session_id: str
     result: AnalysisResult
