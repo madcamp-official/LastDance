@@ -7,6 +7,7 @@ from app.model import session as session_model
 from app.model import analysis as analysis_model
 from app.model import ingest as ingest_model
 from app.model import feedback as feedback_model
+from app.model import submission as submission_model
 
 from app.api import auth
 from app.api import problem as problem_api
@@ -14,6 +15,7 @@ from app.api import session as session_api
 from app.api import analysis as analysis_api
 from app.api import ingest as ingest_api
 from app.api import feedback as feedback_api
+from app.api import submission as submission_api
 from app.database import Base, engine, SessionLocal
 from app.util.messaging import start_producer, stop_producer, close_redis
 from app.worker.consumer import start_consumer, stop_consumer
@@ -55,6 +57,7 @@ app.include_router(session_api.router)
 app.include_router(analysis_api.router)
 app.include_router(ingest_api.router)
 app.include_router(feedback_api.router)
+app.include_router(submission_api.router)
 
 @app.get("/")
 def read_root():
