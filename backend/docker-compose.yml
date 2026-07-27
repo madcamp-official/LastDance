@@ -20,11 +20,66 @@ services:
       - ALLOW_PLAINTEXT_LISTENER=yes
     volumes:
       - kafka_data:/bitnami/kafka
+
+  # Judge0(자체 호스팅) — docs/CLAUDE.md: 사용자 코드는 반드시 이 샌드박스를 통해서만 실행.
+  judge0-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=judge0
+      - POSTGRES_PASSWORD=judge0pass
+      - POSTGRES_DB=judge0
+    volumes:
+      - judge0_db_data:/var/lib/postgresql/data
+
+  judge0-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "judge0pass"]
+    volumes:
+      - judge0_redis_data:/data
+
+  judge0-server:
+    image: judge0/judge0:1.13.1
+    restart: unless-stopped
+    privileged: true
+    ports:
+      - "2358:2358"
+    environment:
+      - REDIS_HOST=judge0-redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=judge0pass
+      - POSTGRES_HOST=judge0-db
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=judge0
+      - POSTGRES_USER=judge0
+      - POSTGRES_PASSWORD=judge0pass
+    depends_on: [judge0-db, judge0-redis]
+
+  judge0-workers:
+    image: judge0/judge0:1.13.1
+    restart: unless-stopped
+    command: ["./scripts/workers"]
+    privileged: true
+    environment:
+      - REDIS_HOST=judge0-redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=judge0pass
+      - POSTGRES_HOST=judge0-db
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=judge0
+      - POSTGRES_USER=judge0
+      - POSTGRES_PASSWORD=judge0pass
+    depends_on: [judge0-db, judge0-redis]
+
   backend:
     build: ./backend
     restart: unless-stopped
     expose: ["8000"]
-  
+    environment:
+      - JUDGE0_URL=http://judge0-server:2358
+    depends_on: [judge0-server]
+
   
   #frontend:
   #  build: ./frontend
@@ -46,3 +101,5 @@ services:
 volumes:
   redis_data:
   kafka_data:
+  judge0_db_data:
+  judge0_redis_data:
