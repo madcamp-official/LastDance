@@ -21,8 +21,8 @@ from app.util.messaging import start_producer, stop_producer, close_redis
 from app.worker.consumer import start_consumer, stop_consumer
 Base.metadata.create_all(engine)
 app = FastAPI(
-    title="LinguaAI",
-    version="0.1.0",
+    title="Codeback",
+    version="1.0.0",
 )
 
 auth.install_error_handler(app)
