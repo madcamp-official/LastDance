@@ -26,6 +26,10 @@ def _iso(dt: Optional[datetime]) -> Optional[str]:
     # 저장된 UTC datetime을 ISO8601 "...Z" 문자열로. None이면 그대로 None.
     if dt is None:
         return None
+    # SQLite는 DateTime(timezone=True)라도 round-trip 후 tzinfo를 잃는다(naive가 됨).
+    # 이 컬럼은 항상 UTC로만 채워지므로 naive면 UTC로 간주.
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
     return dt.isoformat().replace("+00:00", "Z")
 
 
