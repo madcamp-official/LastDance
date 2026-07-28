@@ -5,7 +5,7 @@ sqlalchemy==2.0.51
 pydantic==2.13.4
 email-validator==2.3.0
 passlib==1.7.4
-bcrypt==4.2.1
+bcrypt==4.0.1
 PyJWT==2.10.1
 tree-sitter==0.26.0
 tree-sitter-language-pack==1.13.3
