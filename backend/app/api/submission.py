@@ -151,6 +151,8 @@ async def get_submission(
         runtime_ms=record.runtime_ms,
         memory_kb=record.memory_kb,
         submitted_at=_iso(record.submitted_at),
+        code=record.code,
+        lang=record.language,
     )
 
 

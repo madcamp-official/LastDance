@@ -28,6 +28,8 @@ class SubmissionDetailResponse(BaseModel):
     runtime_ms: Optional[int] = None
     memory_kb: Optional[int] = None
     submitted_at: str
+    code: str
+    lang: str
 
 
 # ---- GET /submissions?session_id={id} ----
