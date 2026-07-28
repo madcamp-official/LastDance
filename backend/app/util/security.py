@@ -4,7 +4,7 @@ from passlib.context import CryptContext
 
 import jwt, os, uuid
 from datetime import UTC, datetime, timedelta
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from sqlalchemy.orm import Session
@@ -70,17 +70,19 @@ def decode_token(token: str) -> dict:
     # 만료/서명 오류 시 jwt.PyJWTError를 그대로 던진다. 호출부에서 처리.
     return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
 
-bearer_Scheme = HTTPBearer()
+bearer_Scheme = HTTPBearer(auto_error=False)  # 미인증 시 fastapi 기본 {"detail": "Not authenticated"} 대신 api-spec.md 포맷으로 직접 응답하기 위해 auto_error 끔
 
 async def get_current_user(
-    token: HTTPAuthorizationCredentials = Depends(bearer_Scheme),  # Header에 포함된 토큰
+    token: Optional[HTTPAuthorizationCredentials] = Depends(bearer_Scheme),  # Header에 포함된 토큰
     db: Session = Depends(get_db),
 ) -> User:
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="인증 정보를 확인할 수 없습니다",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
+    # 순환 import(app.api.auth -> app.util.security) 방지 위해 함수 내부에서 지연 import
+    from app.api.auth import APIError
+
+    credentials_exception = APIError(status.HTTP_401_UNAUTHORIZED, "UNAUTHORIZED", "인증이 필요합니다.")
+
+    if token is None:
+        raise credentials_exception
 
     token = token.credentials  # HTTPAuthorizationCredentials 객체에서 토큰 문자열 추출
 
