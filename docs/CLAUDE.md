@@ -29,11 +29,13 @@ IBM Project CodeNet 데이터셋에서 **풀이 기록(제출 이력)이 확보�
 |---|---|
 | 문제 소스: CodeNet의 AtCoder 문제, 풀이 기록 있는 것만 선별 | 확정 (다운로드 진행 중, 완료 시점 미정) |
 | 코드 에디터: Monaco Editor (자체 통합) | 확정 |
-| 실시간 로그 전송 계층 (`activity-logger.ts`, `useMonacoActivityLogger.ts`) | 구현 완료 (전송 방식만. 수집 항목명은 임시) |
+| 실시간 로그 전송 계층 (백엔드 Ingest Gateway `backend/app/api/ingest.py`) | 구현 완료. EditOp 스키마 확정(`backend/app/schema/analysis.py`) |
+| 실시간 로그 전송 계층 (프론트엔드 `activity-logger.ts`, `useMonacoActivityLogger.ts`) | 2026-07-28 기준 확정된 EditOp 프로토콜에 맞춰 재구현(이전에는 자유 payload를 보내던 구버전) |
 | 팀 역할 분담 | A=백엔드, B=프론트엔드로 확정 |
 | CodeNet 전처리 → 프롬프트 설계 | **보류** — 데이터 다운로드 완료 후 착수 |
 | 채점 엔진 구현 (Judge0 경유) | 구현 완료 (`backend/app/judge`, `backend/docker-compose.yml`의 `judge0-*`) |
-| 수집 항목의 정확한 필드/이벤트 목록 | 미확정 |
+| 키스트로크 분석 결과 조회 (`GET /sessions/{id}/analysis`) | 백엔드 구현 완료. 프론트엔드 조회 UI 2026-07-28 신규 구현 |
+| 수집 항목의 정확한 필드/이벤트 목록 | **확정** — `docs/api-spec.md` "실시간 이벤트 수집" 절 참고 |
 | 백엔드-프론트엔드 API 명세, DB 스키마 (현재 확정 가능한 범위) | `docs/api-spec.md`, `docs/db-schema.md` 참고 — 확장 가능하게 설계됨 |
 
 ## 중요 미해결 항목 (팀 논의 필요, Claude Code가 임의로 확정하면 안 됨)
@@ -46,9 +48,9 @@ IBM Project CodeNet 데이터셋에서 **풀이 기록(제출 이력)이 확보�
 | 영역 | 선택 | 비고 |
 |---|---|---|
 | 코드 에디터 | Monaco Editor | 공식 API 사용, 리버스엔지니어링 불필요 |
-| 실시간 로그 전송 | WebSocket + sendBeacon 폴백 | `frontend/lib/activity-logger.ts` |
+| 실시간 로그 전송 | WebSocket(`/ws/events`) + sendBeacon 폴백(`/events/beacon`) | `frontend/src/lib/activity-logger.ts`. EditOp 스키마 확정, 더 이상 자유 payload 아님 |
 | 코드 실행/채점 | Judge0 (자체 호스팅, 구현 완료) | 위 "중요 미해결 항목" 참고. `backend/app/judge`, `JUDGE0_URL` |
-| 로컬 LLM 서빙 | Ollama + Qwen | 프롬프트 내용은 보류 TODO. 통신 레이어는 지금 mock으로 구현 가능 |
+| LLM 서빙 | vLLM (OpenAI 호환 `/v1/chat/completions`) | **주의: "로컬 LLM"이 아니라 별도 클라우드 호스트로 확인됨** (`backend/app/llm/client.py` 코드 주석: "LLM 서버는 별도 클라우드망 호스트"). 기존 계획(Ollama + 로컬 서빙)에서 실제로 바뀐 것인지 팀 확인 필요. 모델: `qwen3-coder:30b-a3b`(`LLM_MODEL` 환경변수). 프롬프트 내용은 여전히 고정 템플릿(팀A 산출물 반영 전) |
 | 백엔드 프레임워크 | FastAPI | `backend/app` |
 | DB | SQLite(로컬 개발, `DATABASE_URL`) / PostgreSQL(운영 가정) | 스키마는 `docs/db-schema.md` 참고 |
 | Ingest Gateway 중복 제거 | Redis (`redis.asyncio`) | `(sid, seq)` last_seq, TTL 24h. `backend/app/util/messaging.py` |
@@ -93,7 +95,7 @@ IBM Project CodeNet 데이터셋에서 **풀이 기록(제출 이력)이 확보�
 2. **인증 API** — `docs/api-spec.md`의 `/auth/*`, `/users/me` 구현. 비밀번호 해싱(bcrypt/argon2), JWT 발급/검증
 3. **문제 카탈로그 API** — `/problems`, `/problems/:id` 구현. CodeNet 전체 다운로드를 기다리지 않고, 먼저 받아진 일부 표본 문제로 `problems` 테이블 시딩 스크립트를 미리 검증
 4. **세션 라이프사이클 API** — `/sessions` 생성/종료. 이벤트 스키마와 무관하게 세션 시작~종료 시각과 상태만 다룸
-5. **이벤트 수집 백엔드 (제너릭 인제스천)** — WebSocket 서버(`/ws/events`)에서 배치를 받아 `event_type`/`payload` 검증 없이 그대로 `events` 테이블에 적재. sendBeacon 폴백용 `POST /events/beacon`도 함께
+5. **이벤트 수집 백엔드 (Ingest Gateway)** — **구현 완료, 설계 변경됨**: 당초 계획한 "제너릭 인제스천"(자유 `event_type`/`payload`를 검증 없이 `events` 테이블에 적재)이 아니라, EditOp 스키마를 확정해 WebSocket(`/ws/events`)에서 스키마 검증 + `(sid, seq)` 중복 제거(Redis) + Kafka 적재까지 수행하도록 구현됨(`backend/app/api/ingest.py`). sendBeacon 폴백용 `POST /events/beacon`도 동일 스키마로 구현됨. AST 파싱 등 무거운 연산은 별도 Replay Worker(Kafka consumer, `backend/app/worker/consumer.py`)가 `session.end` 수신 시 비동기 처리
 6. **제출(Submission) API** — `/submissions` 생성/조회. **구현 완료**: Judge0 경유로 동기 채점하며, AC면 세션을 자동 종료, 그 외에는 세션을 유지한 채 제출 기록만 남김(`backend/app/api/submission.py`)
 7. **LLM 통신 레이어 뼈대** — `/feedback` 접수 → Ollama에 mock 프롬프트를 보내고 응답을 그대로 반환. 실제 프롬프트는 보류 TODO 완료 후 교체
 8. **테스트/문서화** — 엔드포인트별 기본 통합 테스트, OpenAPI 스펙 자동 생성 세팅
@@ -103,10 +105,11 @@ IBM Project CodeNet 데이터셋에서 **풀이 기록(제출 이력)이 확보�
 1. **프로젝트 셋업** — React + Vite 스캐폴딩, 라우팅, 상태관리(API 미확정 구간은 mock으로 개발), 디자인 시스템 선정
 2. **인증 화면** — 회원가입/로그인 폼 + 유효성 검사, 인증 상태 전역 관리, 보호된 라우트
 3. **문제 카탈로그 화면** — 목록(페이지네이션) + 상세(지문에 수식이 포함될 수 있어 KaTeX 등 렌더러 고려)
-4. **에디터 화면** — Monaco 통합(언어 선택, 테마) + `activity-logger.ts`/`useMonacoActivityLogger.ts` 연결. 실행/제출 버튼은 백엔드의 mock 응답으로 UI 흐름부터 완성
-5. **피드백 UI** — "피드백 보기" 버튼 → mock 응답 표시 패널 + 👍👎 평가 UI. 실제 프롬프트/응답 포맷이 확정되면 파싱 로직만 교체
-6. **비교 통계 UI (플레이스홀더)** — "다른 응시자 대비" 통계 위젯은 목업 데이터로 레이아웃만 우선 구현 (실제 연동은 보류 TODO 완료 후)
-7. **공통** — API 클라이언트를 `IApiClient` 인터페이스로 추상화해서 mock 구현체 ↔ 실제 백엔드 구현체를 나중에 그대로 교체 가능하게 설계
+4. **에디터 화면** — Monaco 통합(언어 선택, 테마) + `activity-logger.ts`/`useMonacoActivityLogger.ts` 연결. **구현 완료**: 실행/제출은 이제 mock이 아니라 실제 Judge0 동기 채점 결과(verdict/runtime/memory)를 받아 표시
+5. **피드백 UI** — "피드백 보기" 버튼 → 응답 표시 패널 + 👍👎 평가 UI. 백엔드가 실제 LLM(vLLM)을 호출하지만 프롬프트 내용은 아직 고정 템플릿(팀A 산출물 반영 전)이므로, 화면 쪽은 텍스트를 그대로 렌더링하는 현재 구조 유지
+6. **키스트로크 분석 결과 UI** — `GET /sessions/{session_id}/analysis` 폴링(202→200) 후 phase별 소요시간/pause/pivot/패턴 표시. 세션 종료(`session.end`) 이후에만 데이터가 채워짐
+7. **비교 통계 UI (플레이스홀더)** — "다른 응시자 대비" 통계 위젯은 목업 데이터로 레이아웃만 우선 구현 (`GET /problems/{id}/stats`는 백엔드에 자리표시자 메시지만 반환하도록 구현되어 있어, 실제 연동은 여전히 보류 TODO 완료 후)
+8. **공통** — API 클라이언트를 `IApiClient` 인터페이스로 추상화해서 mock 구현체 ↔ 실제 백엔드 구현체를 나중에 그대로 교체 가능하게 설계
 
 ## 코딩 컨벤션
 
