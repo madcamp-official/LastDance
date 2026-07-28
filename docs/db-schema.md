@@ -14,7 +14,7 @@ CREATE TABLE users (
 );
 
 -- 문제 (CodeNet의 AtCoder 문제 중 풀이기록 있는 것만 시딩)
--- id를 UUID가 아닌 BIGSERIAL로 결정 (api-spec.md의 problem_id: integer와 동기화, 팀 확정)
+-- api-spec.md: problem_id는 integer (UUID 아님)
 CREATE TABLE problems (
   id            BIGSERIAL PRIMARY KEY,
   source        TEXT NOT NULL DEFAULT 'codenet_atcoder',

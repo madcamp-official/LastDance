@@ -1,0 +1,15 @@
+fastapi==0.139.0
+uvicorn==0.49.0
+sqlalchemy==2.0.51
+pydantic==2.13.4
+email-validator==2.3.0
+passlib==1.7.4
+bcrypt==4.2.1
+PyJWT==2.10.1
+tree-sitter==0.26.0
+tree-sitter-language-pack==1.13.3
+aiokafka==0.14.0
+redis==8.0.1
+zstandard==0.23.0
+requests==2.32.4
+httpx==0.28.1

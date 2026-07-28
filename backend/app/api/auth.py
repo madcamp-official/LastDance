@@ -24,6 +24,9 @@ from app.util.security import (
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+# user enumeration(타이밍) 방지용 더미 해시. user 없을 때도 verify를 돌려 응답 시간을 맞춘다.
+_DUMMY_HASH = get_password_hash("user_enumeration_guard")
+
 
 # ---- 공통 에러 포맷: {"error": {"code": "...", "message": "..."}} ----
 class APIError(HTTPException):
@@ -70,7 +73,9 @@ async def signup(body: SignupRequest, db: Session = Depends(get_db)):
 @router.post("/login", response_model=TokenResponse)
 async def login(body: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == body.email).first()
-    if not user or not verify_password(body.password, user.hashed_password):
+    # user 유무와 무관하게 항상 verify 실행: 존재 여부가 응답 시간으로 새지 않게 함
+    password_ok = verify_password(body.password, user.hashed_password if user else _DUMMY_HASH)
+    if not user or not password_ok:
         raise APIError(
             status.HTTP_401_UNAUTHORIZED,
             "INVALID_CREDENTIALS",
