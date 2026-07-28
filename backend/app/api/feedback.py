@@ -2,7 +2,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.auth import APIError
@@ -143,6 +143,15 @@ async def create_feedback(
 ):
     sub = _load_owned_session(body.session_id, current_user.user_id, db)
 
+    existing = db.query(Feedback).filter(Feedback.session_id == body.session_id).first()
+    if existing:
+        return FeedbackResponse(
+            feedback_id=existing.feedback_id,
+            text=existing.text,
+            model_used=existing.model_used,
+            generated_at=_iso(existing.generated_at),
+        )
+
     problem = db.query(Problem).filter(Problem.problem_id == sub.problem_id).first()
     summary = db.query(SessionSummary).filter(SessionSummary.sid == body.session_id).first()
     pauses = db.query(PauseEventRow).filter(PauseEventRow.sid == body.session_id).all()
@@ -185,6 +194,26 @@ async def create_feedback(
     db.add(feedback)
     db.commit()
     db.refresh(feedback)
+
+    return FeedbackResponse(
+        feedback_id=feedback.feedback_id,
+        text=feedback.text,
+        model_used=feedback.model_used,
+        generated_at=_iso(feedback.generated_at),
+    )
+
+
+@router.get("", response_model=Optional[FeedbackResponse])
+async def get_feedback(
+    session_id: str = Query(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _load_owned_session(session_id, current_user.user_id, db)
+
+    feedback = db.query(Feedback).filter(Feedback.session_id == session_id).first()
+    if not feedback:
+        return None
 
     return FeedbackResponse(
         feedback_id=feedback.feedback_id,

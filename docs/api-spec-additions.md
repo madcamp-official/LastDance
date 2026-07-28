@@ -6,7 +6,7 @@
 
 ---
 
-## 요청 1 — `GET /problems`, `GET /problems/{problem_id}` 확장 (난이도)
+## 요청 1 — `GET /problems`, `GET /problems/{problem_id}` 확장 (난이도) (완료)
 
 `problems` 테이블에 `difficulty` 컬럼 추가: `NULL | "A"|"B"|"C"|"D"|"E"|"F"|"G"` — `keystroke-analysis-dev-plan.md` §5.1에 이미 정의된 7단계 티어(`Enum8('A'..'G')`, 피어 비교 기준선용)를 그대로 재사용합니다. **A = 가장 쉬움, G = 가장 어려움.**
 
@@ -29,7 +29,7 @@
 
 ---
 
-## 요청 2 — `GET /users/me/sessions` (신규, 유저 기준 세션 목록)
+## 요청 2 — `GET /users/me/sessions` (신규, 유저 기준 세션 목록) (완료)
 
 인증 필요(`Authorization: Bearer {access_token}`), 토큰에서 유저를 추론합니다.
 
@@ -66,9 +66,9 @@
 
 ---
 
-## 요청 3 — `GET /submissions/{submission_id}` 응답에 `code` 필드 추가
+## 요청 3 — `GET /submissions/{submission_id}` 응답에 `code`와 'lang' 추가
 
-`judge_submissions.code`는 이미 DB에 저장되어 있으나(`backend/app/model/submission.py`) 어떤 응답 스키마에도 포함되어 있지 않습니다. "과거 제출 답안 보기" 화면에 필요하니 `SubmissionDetailResponse`에 `code: string` 필드를 추가해 그대로 내려주세요.
+`judge_submissions.code`는 이미 DB에 저장되어 있으나(`backend/app/model/submission.py`) 어떤 응답 스키마에도 포함되어 있지 않습니다. "과거 제출 답안 보기" 화면에 필요하니 `SubmissionDetailResponse`에 `code: string`과 `lang: string` 필드를 추가해 그대로 내려주세요.
 
 ---
 

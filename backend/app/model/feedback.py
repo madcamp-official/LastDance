@@ -6,7 +6,7 @@ class Feedback(Base):
     __tablename__ = "feedbacks"
 
     feedback_id = Column(String, primary_key=True, unique=True, index=True, nullable=False)
-    session_id = Column(String, index=True, nullable=False)
+    session_id = Column(String, unique=True, index=True, nullable=False)
     text = Column(String, nullable=False)
     model_used = Column(String, nullable=False)
     generated_at = Column(DateTime(timezone=True), nullable=False)

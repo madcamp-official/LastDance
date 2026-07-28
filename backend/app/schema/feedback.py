@@ -3,7 +3,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 
-# ---- POST /feedback ----
+# ---- POST /feedback, GET /feedback?session_id={id} ----
 class FeedbackRequest(BaseModel):
     session_id: str
 
