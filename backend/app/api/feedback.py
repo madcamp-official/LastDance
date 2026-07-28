@@ -14,12 +14,14 @@ from app.model.problem import Problem
 from app.model.session import Submission
 from app.model.submission import JudgeSubmission
 from app.model.user import User
+from app.schema.baseline import ProblemBaselineResponse
 from app.schema.feedback import (
     FeedbackRatingRequest,
     FeedbackRatingResponse,
     FeedbackRequest,
     FeedbackResponse,
 )
+from app.util.baseline import build_baseline
 from app.util.security import get_current_user
 
 router = APIRouter(prefix="/feedback", tags=["feedback"])
@@ -56,6 +58,13 @@ def get_llm_client() -> VLLMClient:
     return VLLMClient()
 
 
+_METRIC_KO = {
+    "total_duration": "풀이 시간(초)",
+    "attempt_count": "제출 횟수",
+    "pivot_count": "재작성(pivot) 횟수",
+}
+
+
 def _build_user_prompt(
     problem: Optional[Problem],
     summary: Optional[SessionSummary],
@@ -63,6 +72,7 @@ def _build_user_prompt(
     pivots: List[PivotEventRow],
     windows: List[PatternWindowRow],
     latest: Optional[JudgeSubmission],
+    baseline: Optional[ProblemBaselineResponse] = None,
 ) -> str:
     lines: List[str] = []
     lines.append(f"[문제] {problem.title if problem else '알 수 없음'}")
@@ -101,6 +111,25 @@ def _build_user_prompt(
     if latest:
         lines.append(f"[최종 제출] verdict={latest.verdict or '채점 전'}, language={latest.language}")
 
+    if baseline and baseline.metrics:
+        lines.append(f"[비교군 기준선] tier={baseline.tier}, 같은 유형 문제를 푼 다른 응시자들과의 비교:")
+        for m in baseline.metrics:
+            if m.metric not in _METRIC_KO:
+                continue  # pause_ms@LABEL 셀은 합성 전용 — 프롬프트에서 제외
+            p = m.percentiles
+            line = (
+                f"  - {_METRIC_KO[m.metric]}: 비교군 p25={p.p25:.0f}, 중앙값={p.p50:.0f}, p75={p.p75:.0f}"
+            )
+            if m.user_value is not None:
+                line += f" / 이번 세션={m.user_value:.0f} (구간 {m.user_band})"
+            if m.data_source == "estimated":
+                line += " [추정치 기반]"
+            lines.append(line)
+        lines.append(
+            "  비교군 수치는 참고용 분포다. 사용자의 값이 p75보다 크면 상대적으로 오래/많이 걸린 편, "
+            "p25보다 작으면 빠른/적은 편으로 언급하되 단정적 평가는 피할 것."
+        )
+
     return "\n".join(lines)
 
 
@@ -125,7 +154,18 @@ async def create_feedback(
         .first()
     )
 
-    user_prompt = _build_user_prompt(problem, summary, pauses, pivots, windows, latest)
+    # 비교군 기준선: 세션 실측값을 metric 단위에 맞춰 전달
+    # (total_duration 기준선은 초 단위 — session_summaries.total_ms를 초로 변환)
+    user_values = {}
+    if summary:
+        user_values["total_duration"] = summary.total_ms / 1000.0
+        user_values["pivot_count"] = float(summary.pivot_count)
+    n_judged = db.query(JudgeSubmission).filter(JudgeSubmission.session_id == body.session_id).count()
+    if n_judged:
+        user_values["attempt_count"] = float(n_judged)
+    baseline = build_baseline(db, problem, user_values) if problem else None
+
+    user_prompt = _build_user_prompt(problem, summary, pauses, pivots, windows, latest, baseline)
 
     try:
         result = await llm_client.chat(system=_SYSTEM_PROMPT, user=user_prompt)

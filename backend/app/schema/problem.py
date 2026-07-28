@@ -32,7 +32,4 @@ class ProblemDetailResponse(BaseModel):
     source: Optional[str] = None
 
 
-# ---- GET /problems/{problem_id}/stats (비교 통계, 미구현 — 자리표시자) ----
-class ProblemStatsResponse(BaseModel):
-    problem_id: int
-    message: str
+# GET /problems/{problem_id}/stats 응답은 app/schema/baseline.py의 ProblemBaselineResponse 사용.

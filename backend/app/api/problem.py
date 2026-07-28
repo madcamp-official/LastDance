@@ -4,12 +4,13 @@ from sqlalchemy.orm import Session
 from app.api.auth import APIError
 from app.database import get_db
 from app.model.problem import Problem
+from app.schema.baseline import ProblemBaselineResponse
 from app.schema.problem import (
     ProblemDetailResponse,
     ProblemListItem,
     ProblemListResponse,
-    ProblemStatsResponse,
 )
+from app.util.baseline import build_baseline
 
 router = APIRouter(prefix="/problems", tags=["problems"])
 
@@ -57,9 +58,10 @@ async def get_problem(problem_id: int, db: Session = Depends(get_db)):
     )
 
 
-@router.get("/{problem_id}/stats", response_model=ProblemStatsResponse)
+@router.get("/{problem_id}/stats", response_model=ProblemBaselineResponse)
 async def get_problem_stats(problem_id: int, db: Session = Depends(get_db)):
-    # 비교 통계 산출 로직 미확정 (api-spec.md 참고) — 엔드포인트만 예약.
+    # 다른 응시자 대비 통계 — AtCoder 비교군 기준선(baseline_cell, app-db-ingestion-spec.md §4).
+    # metrics가 비어 있으면 이 문제는 비교군 미보유("비교 불가" 처리).
     problem = db.query(Problem).filter(Problem.problem_id == problem_id).first()
     if not problem:
         raise APIError(
@@ -68,7 +70,4 @@ async def get_problem_stats(problem_id: int, db: Session = Depends(get_db)):
             "문제를 찾을 수 없습니다.",
         )
 
-    return ProblemStatsResponse(
-        problem_id=problem.problem_id,
-        message="비교 통계 기능은 아직 준비 중입니다.",
-    )
+    return build_baseline(db, problem)
