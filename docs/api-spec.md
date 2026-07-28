@@ -271,7 +271,7 @@ ID 표기: `problem_id`는 `db-schema.md`의 `problems.id`(BIGSERIAL) 그대로 
 
 | Method | Endpoint | 설명 | 요청 (Body) | 응답 |
 |---|---|---|---|---|
-| POST | `/feedback` | 세션에 대한 과정 기반 피드백 요청 | `{"session_id": "s_001"}` | 200 `{"feedback_id": "f_001", "text": "(mock) 아직 준비 중인 피드백입니다.", "model_used": "qwen2.5-coder:7b", "generated_at": "2026-07-24T05:11:00Z"}` |
+| POST | `/feedback` | 세션에 대한 과정 기반 피드백 요청 | `{"session_id": "s_001"}` | 200 `{"feedback_id": "f_001", "text": "(mock) 아직 준비 중인 피드백입니다.", "model_used": "qwen3-coder:30b-a3b", "generated_at": "2026-07-24T05:11:00Z"}` |
 | PATCH | `/feedback/{feedback_id}/rating` | 피드백 평가(👍👎) | `{"rating": "up"}` | 200 `{"feedback_id": "f_001", "rating": "up"}` |
 
 **POST /feedback** 요청: `session_id`(string, 필수, 예: `"s_001"`)
@@ -281,7 +281,7 @@ ID 표기: `problem_id`는 `db-schema.md`의 `problems.id`(BIGSERIAL) 그대로 
 |---|---|---|---|
 | feedback_id | string | `"f_001"` | |
 | text | string | `"(mock) 아직 준비 중인 피드백입니다."` | 팀A 프롬프트 설계 완료 전까지 mock 고정 문구 |
-| model_used | string | `"qwen2.5-coder:7b"` | |
+| model_used | string | `"qwen3-coder:30b-a3b"` | 실제 서빙 모델(`LLM_MODEL` 환경변수) 그대로 노출. vLLM(OpenAI 호환 API) 경유, 원격 호스트 — `backend/app/llm/client.py` |
 | generated_at | string (ISO8601) | `"2026-07-24T05:11:00Z"` | |
 
 > 필드 구조(`feedback_id`, `text`, `model_used`, `generated_at`)는 유지한 채 `text`의 실제 내용/품질만 팀A 산출물 확정 후 달라지도록 설계 — 프론트엔드 파싱 로직 변경 최소화 목적

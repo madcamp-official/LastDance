@@ -1,4 +1,5 @@
 import type {
+  AnalysisPollResult,
   ApiErrorBody,
   AuthTokens,
   CreateSessionRequest,
@@ -13,10 +14,13 @@ import type {
   ProblemDetail,
   ProblemListResponse,
   RefreshedToken,
-  Session,
+  SessionDetail,
+  SessionEndResult,
+  SessionStartResult,
   SignupRequest,
   Submission,
   SubmissionListResponse,
+  UserSessionListResponse,
   UserSummary,
 } from '../types/api'
 import { ApiError, type IApiClient, type ListProblemsParams } from './api-client'
@@ -92,11 +96,13 @@ export function createHttpApiClient(config: HttpApiClientConfig): IApiClient {
     throw new ApiError(res.status, code, message)
   }
 
-  function toQuery(params?: Record<string, string | number | undefined>) {
+  function toQuery(params?: Record<string, string | number | boolean | undefined>) {
     if (!params) return ''
     const entries = Object.entries(params).filter(([, v]) => v !== undefined)
     if (entries.length === 0) return ''
-    return `?${new URLSearchParams(entries as [string, string][]).toString()}`
+    return `?${new URLSearchParams(
+      entries.map(([k, v]) => [k, String(v)]),
+    ).toString()}`
   }
 
   return {
@@ -139,7 +145,13 @@ export function createHttpApiClient(config: HttpApiClientConfig): IApiClient {
     problems: {
       list(params?: ListProblemsParams) {
         return request<ProblemListResponse>(
-          `/problems${toQuery({ page: params?.page, page_size: params?.page_size })}`,
+          `/problems${toQuery({
+            page: params?.page,
+            page_size: params?.page_size,
+            sort: params?.sort,
+            difficulty: params?.difficulty?.join(','),
+            exclude_solved: params?.exclude_solved,
+          })}`,
         )
       },
       get(problemId: number) {
@@ -149,19 +161,29 @@ export function createHttpApiClient(config: HttpApiClientConfig): IApiClient {
 
     sessions: {
       create(req: CreateSessionRequest) {
-        return request<Session>('/sessions', {
+        return request<SessionStartResult>('/sessions', {
           method: 'POST',
           body: JSON.stringify(req),
         })
       },
       patch(sessionId: string, req: PatchSessionRequest) {
-        return request<Session>(`/sessions/${sessionId}`, {
+        return request<SessionEndResult>(`/sessions/${sessionId}`, {
           method: 'PATCH',
           body: JSON.stringify(req),
         })
       },
       get(sessionId: string) {
-        return request<Session>(`/sessions/${sessionId}`)
+        return request<SessionDetail>(`/sessions/${sessionId}`)
+      },
+      listMine(params) {
+        return request<UserSessionListResponse>(
+          `/users/me/sessions${toQuery({
+            problem_id: params?.problem_id,
+            status: params?.status,
+            page: params?.page,
+            page_size: params?.page_size,
+          })}`,
+        )
       },
     },
 
@@ -197,6 +219,19 @@ export function createHttpApiClient(config: HttpApiClientConfig): IApiClient {
             body: JSON.stringify({ rating }),
           },
         )
+      },
+      getBySession(sessionId: string) {
+        return request<Feedback | null>(
+          `/feedback${toQuery({ session_id: sessionId })}`,
+        )
+      },
+    },
+
+    analysis: {
+      get(sessionId: string) {
+        // 200(완료)과 202(처리 중)는 둘 다 res.ok라 그대로 유니온으로 반환.
+        // 404(ANALYSIS_NOT_FOUND)는 request()가 ApiError로 던진다 — 호출부에서 처리.
+        return request<AnalysisPollResult>(`/sessions/${sessionId}/analysis`)
       },
     },
   }

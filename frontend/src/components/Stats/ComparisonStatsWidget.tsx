@@ -1,5 +1,6 @@
-// docs/api-spec.md:226-233 — GET /problems/{id}/stats는 미구현(엔드포인트만 예약).
-// 실제 연동 전까지 정적 mock 데이터로 레이아웃만 구현한다.
+// docs/api-spec.md "비교 통계 (Stats)" 절 — GET /problems/{id}/stats는 백엔드에 자리표시자
+// 메시지만 반환하도록 구현되어 있다(실제 통계 산출 로직은 없음). 실제 연동 전까지
+// 정적 mock 데이터로 레이아웃만 구현한다.
 const MOCK_STATS = {
   percentile: 62,
   medianTimeMinutes: 9,
