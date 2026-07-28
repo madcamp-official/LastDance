@@ -41,3 +41,24 @@ class SessionDetailResponse(BaseModel):
     started_at: str
     ended_at: Optional[str] = None
     status: str  # "active" | "solved" | "abandoned"
+
+
+# ---- GET /users/me/sessions (유저 기준 세션 목록) ----
+class UserSessionListItem(BaseModel):
+    session_id: str
+    problem_id: int
+    problem_title: str
+    difficulty: Optional[str] = None
+    language: Optional[str] = None
+    status: str  # "active" | "solved" | "abandoned"
+    started_at: str
+    ended_at: Optional[str] = None
+    latest_verdict: Optional[str] = None
+    latest_submitted_at: Optional[str] = None
+
+
+class UserSessionListResponse(BaseModel):
+    items: List[UserSessionListItem]
+    page: int
+    page_size: int
+    total_count: int

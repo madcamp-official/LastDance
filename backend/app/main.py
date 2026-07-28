@@ -55,6 +55,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(problem_api.router)
 app.include_router(session_api.router)
+app.include_router(session_api.users_router)
 app.include_router(analysis_api.router)
 app.include_router(ingest_api.router)
 app.include_router(feedback_api.router)

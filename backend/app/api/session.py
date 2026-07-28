@@ -1,14 +1,15 @@
 import uuid
 from datetime import UTC, datetime
-from typing import Optional
+from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.auth import APIError
 from app.database import get_db
 from app.model.problem import Problem
 from app.model.session import Submission
+from app.model.submission import JudgeSubmission
 from app.model.user import User
 from app.schema.session import (
     SessionDetailResponse,
@@ -16,10 +17,13 @@ from app.schema.session import (
     SessionEndResponse,
     SessionStartRequest,
     SessionStartResponse,
+    UserSessionListItem,
+    UserSessionListResponse,
 )
 from app.util.security import get_current_user
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
+users_router = APIRouter(prefix="/users/me/sessions", tags=["sessions"])
 
 
 def _iso(dt: Optional[datetime]) -> Optional[str]:
@@ -121,4 +125,74 @@ async def get_session(
         started_at=_iso(sub.started_at),
         ended_at=_iso(sub.ended_at),
         status=current_status,
+    )
+
+
+@users_router.get("", response_model=UserSessionListResponse)
+async def list_my_sessions(
+    problem_id: Optional[int] = Query(None),
+    status_filter: Optional[Literal["active", "solved", "abandoned"]] = Query(None, alias="status"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    query = db.query(Submission).filter(Submission.user_id == current_user.user_id)
+
+    if problem_id is not None:
+        query = query.filter(Submission.problem_id == problem_id)
+
+    if status_filter == "active":
+        query = query.filter(Submission.final_status.is_(None))
+    elif status_filter is not None:
+        query = query.filter(Submission.final_status == status_filter)
+
+    total_count = query.count()
+    rows = (
+        query.order_by(Submission.started_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+
+    problem_ids = {r.problem_id for r in rows}
+    problems_by_id = (
+        {p.problem_id: p for p in db.query(Problem).filter(Problem.problem_id.in_(problem_ids)).all()}
+        if problem_ids
+        else {}
+    )
+
+    # 세션별 가장 최근 judge_submissions 1건(있으면). 페이지 크기만큼만 조회하면 되므로 파이썬에서 max 계산.
+    session_ids = [r.session_id for r in rows]
+    latest_by_session: dict[str, JudgeSubmission] = {}
+    if session_ids:
+        for js in db.query(JudgeSubmission).filter(JudgeSubmission.session_id.in_(session_ids)).all():
+            cur = latest_by_session.get(js.session_id)
+            if cur is None or js.submitted_at > cur.submitted_at:
+                latest_by_session[js.session_id] = js
+
+    items = []
+    for r in rows:
+        problem = problems_by_id.get(r.problem_id)
+        latest = latest_by_session.get(r.session_id)
+        items.append(
+            UserSessionListItem(
+                session_id=r.session_id,
+                problem_id=r.problem_id,
+                problem_title=problem.title if problem else "",
+                difficulty=problem.difficulty if problem else None,
+                language=r.language,
+                status=r.final_status if r.final_status is not None else "active",
+                started_at=_iso(r.started_at),
+                ended_at=_iso(r.ended_at),
+                latest_verdict=latest.verdict if latest else None,
+                latest_submitted_at=_iso(latest.submitted_at) if latest else None,
+            )
+        )
+
+    return UserSessionListResponse(
+        items=items,
+        page=page,
+        page_size=page_size,
+        total_count=total_count,
     )
