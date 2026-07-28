@@ -246,6 +246,12 @@ export function SolvePage() {
       setSession(refreshed)
       if (session.status === 'active' && refreshed.status !== 'active') {
         endKeystrokeLogging('submitted_ac')
+        // 세션이 끝났으니 복원 포인터를 지운다 — 다음에 문제 목록에서 다시 들어오면
+        // 새 세션으로 시작하고, 지난 풀이는 마이페이지에서만 본다.
+        if (problemId) {
+          localStorage.removeItem(sessionStorageKey(problemId))
+          localStorage.removeItem(codeStorageKey(problemId))
+        }
       }
     } catch (err) {
       setSubmitError(err instanceof ApiError ? err.message : '제출하지 못했습니다.')
@@ -261,6 +267,11 @@ export function SolvePage() {
       await apiClient.sessions.patch(session.session_id, { status: 'abandoned', language })
       setSession({ ...session, status: 'abandoned', ended_at: new Date().toISOString() })
       endKeystrokeLogging()
+      // AC 종료와 동일한 이유로 복원 포인터를 지운다.
+      if (problemId) {
+        localStorage.removeItem(sessionStorageKey(problemId))
+        localStorage.removeItem(codeStorageKey(problemId))
+      }
     } catch {
       // 종료 실패 — 버튼을 다시 눌러 재시도 가능하도록 세션 상태를 그대로 유지
     } finally {

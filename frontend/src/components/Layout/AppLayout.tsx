@@ -20,7 +20,9 @@ export function AppLayout() {
         </Link>
         {status === 'authenticated' && (
           <div className="flex items-center gap-3 text-sm">
-            <span className="text-gray-500">{user?.nickname ?? '내 계정'}</span>
+            <Link to="/me" className="text-gray-500 hover:text-gray-700 hover:underline dark:hover:text-gray-300">
+              {user?.nickname ?? '내 계정'}
+            </Link>
             <button
               type="button"
               onClick={handleLogout}

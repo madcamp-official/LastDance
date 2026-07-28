@@ -6,6 +6,7 @@ import type {
   CreateSubmissionRequest,
   CreateSubmissionResponse,
   CurrentUser,
+  DifficultyTier,
   Feedback,
   FeedbackRating,
   FeedbackRatingResponse,
@@ -20,9 +21,13 @@ import type {
   SignupRequest,
   Submission,
   SubmissionListResponse,
+  UserSessionListItem,
+  UserSessionListResponse,
   UserSummary,
 } from '../types/api'
 import { ApiError, type IApiClient, type ListProblemsParams } from './api-client'
+
+const DIFFICULTY_ORDER: DifficultyTier[] = ['A', 'B', 'C', 'D', 'E', 'F', 'G']
 
 interface StoredUser extends UserSummary {
   password: string
@@ -54,7 +59,8 @@ interface MockDb {
   accessTokens: Record<string, string>
 }
 
-const STORAGE_KEY = 'lastdance_mock_db_v1'
+// v2: problems.difficulty, submissions.code 필드 추가로 스키마가 바뀌어 버전을 올림(구 데이터와 비호환).
+const STORAGE_KEY = 'lastdance_mock_db_v2'
 
 // 실제 CodeNet 문제 지문을 사용하지 않는, UI 개발 전용 placeholder 데이터.
 // source를 'mock_local'로 두어 확정된 'codenet_atcoder' 값과 구분한다.
@@ -69,6 +75,7 @@ function seedDb(): MockDb {
         constraints: '1 <= a, b, c <= 1000',
         examples: [{ input: '1 2 3', output: '6' }],
         source: 'mock_local',
+        difficulty: 'A',
       },
       {
         problem_id: 2,
@@ -77,6 +84,43 @@ function seedDb(): MockDb {
         constraints: '1 <= |s| <= 100',
         examples: [{ input: 'hello', output: 'olleh' }],
         source: 'mock_local',
+        difficulty: 'A',
+      },
+      {
+        problem_id: 3,
+        title: '[mock] 두 수의 최대공약수',
+        statement: '두 양의 정수 a, b가 주어질 때 최대공약수를 출력하시오.',
+        constraints: '1 <= a, b <= 10^9',
+        examples: [{ input: '12 18', output: '6' }],
+        source: 'mock_local',
+        difficulty: 'B',
+      },
+      {
+        problem_id: 4,
+        title: '[mock] 최장 증가 부분수열',
+        statement: '길이 n인 수열이 주어질 때 최장 증가 부분수열의 길이를 구하시오.',
+        constraints: '1 <= n <= 100000',
+        examples: [{ input: '5\n1 3 2 4 5', output: '4' }],
+        source: 'mock_local',
+        difficulty: 'D',
+      },
+      {
+        problem_id: 5,
+        title: '[mock] 그래프 최단 경로',
+        statement: '가중치 있는 그래프에서 두 정점 사이의 최단 경로 길이를 구하시오.',
+        constraints: '1 <= n <= 100000, 1 <= m <= 200000',
+        examples: [{ input: '3 2\n1 2 3\n2 3 4\n1 3', output: '7' }],
+        source: 'mock_local',
+        difficulty: 'E',
+      },
+      {
+        problem_id: 6,
+        title: '[mock] 트리 지름 구하기',
+        statement: '트리가 주어질 때 트리의 지름(가장 먼 두 정점 사이 거리)을 구하시오.',
+        constraints: '1 <= n <= 200000',
+        examples: [{ input: '4\n1 2\n2 3\n3 4', output: '3' }],
+        source: 'mock_local',
+        difficulty: 'G',
       },
     ],
     sessions: [],
@@ -124,6 +168,24 @@ export function createMockApiClient(): IApiClient {
       throw new ApiError(401, 'UNAUTHORIZED', '인증이 필요합니다.')
     }
     return userId
+  }
+
+  function currentUserIdOrNull(): string | null {
+    return (currentAccessToken && db.accessTokens[currentAccessToken]) || null
+  }
+
+  // 해당 유저가 problemId를 AC 받은 적 있으면 가장 최근 AC 제출 시각, 없으면 null.
+  function solvedAtForUser(userId: string, problemId: number): string | null {
+    const sessionIds = new Set(
+      db.sessions
+        .filter((s) => s.problem_id === problemId && s.user_id === userId)
+        .map((s) => s.session_id),
+    )
+    const acTimes = db.submissions
+      .filter((s) => sessionIds.has(s.session_id) && s.verdict === 'AC')
+      .map((s) => s.submitted_at)
+    if (acTimes.length === 0) return null
+    return [...acTimes].sort().at(-1) ?? null
   }
 
   return {
@@ -203,17 +265,40 @@ export function createMockApiClient(): IApiClient {
 
     problems: {
       async list(params?: ListProblemsParams): Promise<ProblemListResponse> {
+        const userId = currentUserIdOrNull()
+        let pool = db.problems.map((p) => ({
+          problem_id: p.problem_id,
+          title: p.title,
+          difficulty: p.difficulty,
+          solved_at: userId ? solvedAtForUser(userId, p.problem_id) : null,
+        }))
+
+        if (params?.difficulty && params.difficulty.length > 0) {
+          pool = pool.filter((p) => p.difficulty && params.difficulty!.includes(p.difficulty))
+        }
+        if (params?.exclude_solved) {
+          pool = pool.filter((p) => !p.solved_at)
+        }
+
+        const sort = params?.sort ?? 'difficulty_asc'
+        if (sort === 'problem_id') {
+          pool = [...pool].sort((a, b) => a.problem_id - b.problem_id)
+        } else {
+          const rank = (d: DifficultyTier | null) =>
+            d ? DIFFICULTY_ORDER.indexOf(d) : Number.MAX_SAFE_INTEGER
+          pool = [...pool].sort((a, b) =>
+            sort === 'difficulty_desc' ? rank(b.difficulty) - rank(a.difficulty) : rank(a.difficulty) - rank(b.difficulty),
+          )
+        }
+
         const page = params?.page ?? 1
         const pageSize = params?.page_size ?? 20
         const start = (page - 1) * pageSize
-        const items = db.problems
-          .slice(start, start + pageSize)
-          .map(({ problem_id, title }) => ({ problem_id, title }))
         return {
-          items,
+          items: pool.slice(start, start + pageSize),
           page,
           page_size: pageSize,
-          total_count: db.problems.length,
+          total_count: pool.length,
         }
       },
 
@@ -278,6 +363,42 @@ export function createMockApiClient(): IApiClient {
         }
         return session
       },
+
+      async listMine(params): Promise<UserSessionListResponse> {
+        const userId = requireCurrentUserId()
+        let items: UserSessionListItem[] = db.sessions
+          .filter((s) => s.user_id === userId)
+          .filter((s) => params?.problem_id === undefined || s.problem_id === params.problem_id)
+          .filter((s) => params?.status === undefined || s.status === params.status)
+          .map((s) => {
+            const problem = db.problems.find((p) => p.problem_id === s.problem_id)
+            const subs = db.submissions.filter((sub) => sub.session_id === s.session_id)
+            const latest =
+              subs.length > 0
+                ? subs.reduce((a, b) => (a.submitted_at > b.submitted_at ? a : b))
+                : null
+            return {
+              session_id: s.session_id,
+              problem_id: s.problem_id,
+              problem_title: problem?.title ?? '',
+              difficulty: problem?.difficulty ?? null,
+              language: s.language,
+              status: s.status,
+              started_at: s.started_at,
+              ended_at: s.ended_at,
+              latest_verdict: latest?.verdict ?? null,
+              latest_submitted_at: latest?.submitted_at ?? null,
+            }
+          })
+          .sort((a, b) => (a.started_at < b.started_at ? 1 : -1))
+
+        const page = params?.page ?? 1
+        const pageSize = params?.page_size ?? 20
+        const total_count = items.length
+        const start = (page - 1) * pageSize
+        items = items.slice(start, start + pageSize)
+        return { items, page, page_size: pageSize, total_count }
+      },
     },
 
     submissions: {
@@ -296,6 +417,7 @@ export function createMockApiClient(): IApiClient {
           runtime_ms: verdict === 'AC' ? Math.round(50 + Math.random() * 400) : null,
           memory_kb: verdict === 'AC' ? Math.round(8000 + Math.random() * 4000) : null,
           submitted_at: new Date().toISOString(),
+          code: req.code,
         }
         db.submissions.push(submission)
 
@@ -366,6 +488,14 @@ export function createMockApiClient(): IApiClient {
           throw new ApiError(404, 'FEEDBACK_NOT_FOUND', '피드백을 찾을 수 없습니다.')
         }
         return { feedback_id: feedbackId, rating }
+      },
+
+      async getBySession(sessionId: string): Promise<Feedback | null> {
+        const matches = db.feedback.filter((f) => f.session_id === sessionId)
+        if (matches.length === 0) return null
+        const latest = matches.reduce((a, b) => (a.generated_at > b.generated_at ? a : b))
+        const { session_id: _sessionId, ...rest } = latest
+        return rest
       },
     },
 

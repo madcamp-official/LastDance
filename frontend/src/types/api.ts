@@ -43,10 +43,15 @@ export interface CurrentUser extends UserSummary {
 }
 
 // ── 문제 카탈로그 ────────────────────────────────────────
+// docs/api-spec-additions.md 요청 1: difficulty(A=쉬움~G=어려움), solved_at(인증 유저 기준) — 아직 미구현.
+
+export type DifficultyTier = 'A' | 'B' | 'C' | 'D' | 'E' | 'F' | 'G'
 
 export interface ProblemListItem {
   problem_id: number
   title: string
+  difficulty: DifficultyTier | null
+  solved_at: string | null
 }
 
 export interface ProblemListResponse {
@@ -68,6 +73,7 @@ export interface ProblemDetail {
   constraints: string | null
   examples: ProblemExample[]
   source: string
+  difficulty: DifficultyTier | null
 }
 
 // ── 세션 ────────────────────────────────────────────────
@@ -113,6 +119,35 @@ export interface PatchSessionRequest {
 export interface SessionEndResult {
   session_id: string
   status: string
+}
+
+// ── 유저 기준 세션 목록 (docs/api-spec-additions.md 요청 2, 아직 미구현) ──────
+
+export interface UserSessionListItem {
+  session_id: string
+  problem_id: number
+  problem_title: string
+  difficulty: DifficultyTier | null
+  language: string | null
+  status: SessionStatus
+  started_at: string
+  ended_at: string | null
+  latest_verdict: SubmissionVerdict
+  latest_submitted_at: string | null
+}
+
+export interface UserSessionListResponse {
+  items: UserSessionListItem[]
+  page: number
+  page_size: number
+  total_count: number
+}
+
+export interface ListMineSessionsParams {
+  problem_id?: number
+  status?: SessionStatus
+  page?: number
+  page_size?: number
 }
 
 // ── 실시간 이벤트 수집 (Ingest Gateway, /ws/events, /events/beacon) ──────
@@ -313,6 +348,9 @@ export interface Submission {
   runtime_ms: number | null
   memory_kb: number | null
   submitted_at: string
+  // docs/api-spec-additions.md 요청 3 — 아직 미구현. 반영 전 실서버 응답엔 필드 자체가 없을 수
+  // 있으니(런타임 undefined), 소비하는 쪽에서 `code ?? ''`로 방어할 것.
+  code: string
 }
 
 export interface SubmissionListItem {

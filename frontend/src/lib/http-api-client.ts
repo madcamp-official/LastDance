@@ -20,6 +20,7 @@ import type {
   SignupRequest,
   Submission,
   SubmissionListResponse,
+  UserSessionListResponse,
   UserSummary,
 } from '../types/api'
 import { ApiError, type IApiClient, type ListProblemsParams } from './api-client'
@@ -95,11 +96,13 @@ export function createHttpApiClient(config: HttpApiClientConfig): IApiClient {
     throw new ApiError(res.status, code, message)
   }
 
-  function toQuery(params?: Record<string, string | number | undefined>) {
+  function toQuery(params?: Record<string, string | number | boolean | undefined>) {
     if (!params) return ''
     const entries = Object.entries(params).filter(([, v]) => v !== undefined)
     if (entries.length === 0) return ''
-    return `?${new URLSearchParams(entries as [string, string][]).toString()}`
+    return `?${new URLSearchParams(
+      entries.map(([k, v]) => [k, String(v)]),
+    ).toString()}`
   }
 
   return {
@@ -142,7 +145,13 @@ export function createHttpApiClient(config: HttpApiClientConfig): IApiClient {
     problems: {
       list(params?: ListProblemsParams) {
         return request<ProblemListResponse>(
-          `/problems${toQuery({ page: params?.page, page_size: params?.page_size })}`,
+          `/problems${toQuery({
+            page: params?.page,
+            page_size: params?.page_size,
+            sort: params?.sort,
+            difficulty: params?.difficulty?.join(','),
+            exclude_solved: params?.exclude_solved,
+          })}`,
         )
       },
       get(problemId: number) {
@@ -165,6 +174,16 @@ export function createHttpApiClient(config: HttpApiClientConfig): IApiClient {
       },
       get(sessionId: string) {
         return request<SessionDetail>(`/sessions/${sessionId}`)
+      },
+      listMine(params) {
+        return request<UserSessionListResponse>(
+          `/users/me/sessions${toQuery({
+            problem_id: params?.problem_id,
+            status: params?.status,
+            page: params?.page,
+            page_size: params?.page_size,
+          })}`,
+        )
       },
     },
 
@@ -199,6 +218,11 @@ export function createHttpApiClient(config: HttpApiClientConfig): IApiClient {
             method: 'PATCH',
             body: JSON.stringify({ rating }),
           },
+        )
+      },
+      getBySession(sessionId: string) {
+        return request<Feedback | null>(
+          `/feedback${toQuery({ session_id: sessionId })}`,
         )
       },
     },

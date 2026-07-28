@@ -22,6 +22,14 @@ const ProblemDetailPage = lazy(() =>
 const SolvePage = lazy(() =>
   import('./pages/SolvePage').then((m) => ({ default: m.SolvePage })),
 )
+const MyPage = lazy(() =>
+  import('./pages/MyPage').then((m) => ({ default: m.MyPage })),
+)
+const ProblemHistoryPage = lazy(() =>
+  import('./pages/ProblemHistoryPage').then((m) => ({
+    default: m.ProblemHistoryPage,
+  })),
+)
 
 function PageFallback() {
   return (
@@ -48,6 +56,8 @@ function App() {
               <Route path="/problems" element={<ProblemListPage />} />
               <Route path="/problems/:problemId" element={<ProblemDetailPage />} />
               <Route path="/problems/:problemId/solve" element={<SolvePage />} />
+              <Route path="/me" element={<MyPage />} />
+              <Route path="/me/problems/:problemId" element={<ProblemHistoryPage />} />
             </Route>
           </Route>
         </Routes>

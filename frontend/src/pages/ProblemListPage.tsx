@@ -2,24 +2,37 @@ import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { apiClient } from '../lib/api'
 import { ApiError } from '../lib/api-client'
-import type { ProblemListItem } from '../types/api'
+import { DifficultyBadge } from '../components/ProblemCatalog/DifficultyBadge'
+import type { DifficultyTier, ProblemListItem, UserSessionListItem } from '../types/api'
 
 const PAGE_SIZE = 20
+const ALL_TIERS: DifficultyTier[] = ['A', 'B', 'C', 'D', 'E', 'F', 'G']
 
 export function ProblemListPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const page = Number(searchParams.get('page') ?? '1')
+
+  const [showSolved, setShowSolved] = useState(false)
+  const [selectedDifficulties, setSelectedDifficulties] = useState<DifficultyTier[]>([])
 
   const [items, setItems] = useState<ProblemListItem[]>([])
   const [total, setTotal] = useState(0)
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
+  const [inProgress, setInProgress] = useState<UserSessionListItem[]>([])
+
   useEffect(() => {
     let cancelled = false
     setStatus('loading')
     apiClient.problems
-      .list({ page, page_size: PAGE_SIZE })
+      .list({
+        page,
+        page_size: PAGE_SIZE,
+        sort: 'difficulty_asc',
+        difficulty: selectedDifficulties.length > 0 ? selectedDifficulties : undefined,
+        exclude_solved: !showSolved,
+      })
       .then((res) => {
         if (cancelled) return
         setItems(res.items)
@@ -34,30 +47,107 @@ export function ProblemListPage() {
     return () => {
       cancelled = true
     }
-  }, [page])
+  }, [page, showSolved, selectedDifficulties])
+
+  useEffect(() => {
+    let cancelled = false
+    apiClient.sessions
+      .listMine({ status: 'active', page_size: 50 })
+      .then((res) => {
+        if (!cancelled) setInProgress(res.items)
+      })
+      .catch(() => {
+        // "풀이 중인 문제" 섹션은 부가 정보 — 조회 실패해도 조용히 숨긴다.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+
+  function toggleDifficulty(tier: DifficultyTier) {
+    setSelectedDifficulties((prev) =>
+      prev.includes(tier) ? prev.filter((t) => t !== tier) : [...prev, tier],
+    )
+    setSearchParams({ page: '1' })
+  }
+
+  function handleShowSolvedChange(checked: boolean) {
+    setShowSolved(checked)
+    setSearchParams({ page: '1' })
+  }
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-8">
       <h1 className="mb-6 text-2xl font-semibold">문제 목록</h1>
 
+      <div className="mb-6 flex flex-wrap items-center gap-4 rounded-md border border-gray-200 p-3 text-sm dark:border-gray-800">
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={showSolved}
+            onChange={(e) => handleShowSolvedChange(e.target.checked)}
+            className="h-4 w-4 rounded border-gray-300"
+          />
+          Show solved problems
+        </label>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {ALL_TIERS.map((tier) => (
+            <button
+              key={tier}
+              type="button"
+              onClick={() => toggleDifficulty(tier)}
+              aria-pressed={selectedDifficulties.includes(tier)}
+              className="rounded-full border border-gray-300 px-2 py-0.5 text-xs font-medium aria-pressed:border-indigo-600 aria-pressed:bg-indigo-50 aria-pressed:text-indigo-700 dark:border-gray-700 dark:aria-pressed:bg-indigo-950 dark:aria-pressed:text-indigo-300"
+            >
+              {tier}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {inProgress.length > 0 && (
+        <div className="mb-6">
+          <h2 className="mb-2 text-sm font-medium text-gray-500">풀이 중인 문제</h2>
+          <ul className="flex flex-col divide-y divide-gray-200 rounded-md border border-gray-200 dark:divide-gray-800 dark:border-gray-800">
+            {inProgress.map((s) => (
+              <li key={s.session_id} className="flex items-center gap-3 px-3 py-2.5">
+                <DifficultyBadge difficulty={s.difficulty} />
+                <Link
+                  to={`/problems/${s.problem_id}/solve`}
+                  className="font-medium text-indigo-600 hover:underline"
+                >
+                  {s.problem_title}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {status === 'loading' && <p className="text-gray-500">불러오는 중...</p>}
       {status === 'error' && <p className="text-red-600">{errorMessage}</p>}
       {status === 'ready' && items.length === 0 && (
-        <p className="text-gray-500">등록된 문제가 없습니다.</p>
+        <p className="text-gray-500">조건에 맞는 문제가 없습니다.</p>
       )}
 
       {status === 'ready' && items.length > 0 && (
         <ul className="flex flex-col divide-y divide-gray-200 dark:divide-gray-800">
           {items.map((problem) => (
-            <li key={problem.problem_id} className="py-3">
+            <li key={problem.problem_id} className="flex items-center gap-3 py-3">
+              <DifficultyBadge difficulty={problem.difficulty} />
               <Link
                 to={`/problems/${problem.problem_id}`}
-                className="font-medium text-indigo-600 hover:underline"
+                className="flex-1 font-medium text-indigo-600 hover:underline"
               >
                 {problem.title}
               </Link>
+              {problem.solved_at && (
+                <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+                  Solved: {new Date(problem.solved_at).toLocaleDateString()}
+                </span>
+              )}
             </li>
           ))}
         </ul>
