@@ -1,9 +1,15 @@
+from datetime import UTC, datetime
+from typing import Optional
+
 from fastapi import APIRouter, Depends, Query, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.auth import APIError
 from app.database import get_db
 from app.model.problem import Problem
+from app.model.submission import JudgeSubmission
+from app.model.user import User
 from app.schema.baseline import ProblemBaselineResponse
 from app.schema.problem import (
     ProblemDetailResponse,
@@ -11,25 +17,72 @@ from app.schema.problem import (
     ProblemListResponse,
 )
 from app.util.baseline import build_baseline
+from app.util.security import get_current_user_optional
 
 router = APIRouter(prefix="/problems", tags=["problems"])
+
+_VALID_DIFFICULTIES = {"A", "B", "C", "D", "E", "F", "G"}
+
+
+def _iso(dt: datetime) -> str:
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt.isoformat().replace("+00:00", "Z")
 
 
 @router.get("", response_model=ProblemListResponse)
 async def list_problems(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    sort: str = Query("difficulty_asc"),
+    difficulty: Optional[str] = Query(None),
+    exclude_solved: bool = Query(False),
+    current_user: Optional[User] = Depends(get_current_user_optional),
     db: Session = Depends(get_db),
 ):
-    total_count = db.query(Problem).count()
-    rows = (
-        db.query(Problem)
-        .order_by(Problem.problem_id)
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-        .all()
-    )
-    items = [ProblemListItem(problem_id=p.problem_id, title=p.title) for p in rows]
+    query = db.query(Problem)
+
+    if difficulty:
+        tiers = {d.strip().upper() for d in difficulty.split(",") if d.strip()} & _VALID_DIFFICULTIES
+        if tiers:
+            query = query.filter(Problem.difficulty.in_(tiers))
+
+    # 인증된 유저의 문제별 최신 AC 제출 시각 (exclude_solved/solved_at 둘 다에 씀)
+    solved_at_by_problem = {}
+    if current_user is not None:
+        ac_rows = (
+            db.query(JudgeSubmission.problem_id, func.max(JudgeSubmission.submitted_at))
+            .filter(
+                JudgeSubmission.user_id == current_user.user_id,
+                JudgeSubmission.verdict == "AC",
+            )
+            .group_by(JudgeSubmission.problem_id)
+            .all()
+        )
+        solved_at_by_problem = {problem_id: submitted_at for problem_id, submitted_at in ac_rows}
+
+        if exclude_solved and solved_at_by_problem:
+            query = query.filter(~Problem.problem_id.in_(solved_at_by_problem.keys()))
+
+    if sort == "difficulty_desc":
+        query = query.order_by(Problem.difficulty.desc(), Problem.problem_id)
+    elif sort == "problem_id":
+        query = query.order_by(Problem.problem_id)
+    else:
+        query = query.order_by(Problem.difficulty.asc(), Problem.problem_id)
+
+    total_count = query.count()
+    rows = query.offset((page - 1) * page_size).limit(page_size).all()
+
+    items = [
+        ProblemListItem(
+            problem_id=p.problem_id,
+            title=p.title,
+            difficulty=p.difficulty,
+            solved_at=_iso(solved_at_by_problem[p.problem_id]) if p.problem_id in solved_at_by_problem else None,
+        )
+        for p in rows
+    ]
     return ProblemListResponse(
         items=items,
         page=page,
@@ -55,6 +108,7 @@ async def get_problem(problem_id: int, db: Session = Depends(get_db)):
         constraints=problem.constraints,
         examples=problem.examples or [],
         source=problem.source,
+        difficulty=problem.difficulty,
     )
 
 

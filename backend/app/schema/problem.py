@@ -13,6 +13,8 @@ class Example(BaseModel):
 class ProblemListItem(BaseModel):
     problem_id: int
     title: str
+    difficulty: Optional[str] = None
+    solved_at: Optional[str] = None
 
 
 class ProblemListResponse(BaseModel):
@@ -30,6 +32,7 @@ class ProblemDetailResponse(BaseModel):
     constraints: Optional[str] = None
     examples: List[Example] = []
     source: Optional[str] = None
+    difficulty: Optional[str] = None
 
 
 # GET /problems/{problem_id}/stats 응답은 app/schema/baseline.py의 ProblemBaselineResponse 사용.

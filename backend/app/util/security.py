@@ -102,3 +102,22 @@ async def get_current_user(
         raise credentials_exception
 
     return user
+
+
+async def get_current_user_optional(
+    token: Optional[HTTPAuthorizationCredentials] = Depends(bearer_Scheme),
+    db: Session = Depends(get_db),
+) -> Optional[User]:
+    # 인증 없거나 유효하지 않으면 None(비인증 취급). 401을 던지지 않는 점이 get_current_user와 다름.
+    if token is None:
+        return None
+
+    try:
+        payload = decode_token(token.credentials)
+    except jwt.PyJWTError:
+        return None
+
+    if payload.get("type") != "access":
+        return None
+
+    return db.query(User).filter(User.email == payload.get("sub")).first()
