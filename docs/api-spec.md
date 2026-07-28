@@ -290,10 +290,22 @@ ID 표기: `problem_id`는 `db-schema.md`의 `problems.id`(BIGSERIAL) 그대로 
 
 ---
 
-## 비교 통계 (Stats) — 확정 불가, 자리표시자만
+## 비교 통계 (Stats)
 
 | Method | Endpoint | 설명 | 상태 |
 |---|---|---|---|
-| GET | `/problems/{problem_id}/stats` | 다른 응시자 대비 통계 | 미구현 (엔드포인트만 예약) |
+| GET | `/problems/{problem_id}/stats` | 다른 응시자 대비 통계 (AtCoder 비교군 기준선) | 구현됨 |
 
-> CodeNet 기반 "다른 응시자 대비 통계"는 팀A의 구조화 산출물에 의존하므로 현재 필드를 확정하지 않습니다. 프론트엔드는 이 엔드포인트를 mock으로 대체해 UI 레이아웃만 먼저 구현하세요.
+**GET /problems/{problem_id}/stats** 응답 (`app/schema/baseline.py` `ProblemBaselineResponse`):
+
+| 키 | 타입 | 설명 |
+|---|---|---|
+| problem_id | int | 앱 문제 id |
+| source_problem_id | string \| null | AtCoder 원본 id (예: `"p02540"`), 비교군 없으면 null |
+| tier | string \| null | 난이도 tier `A`~`G` |
+| cluster_id | int \| null | 문제 클러스터. `-1`은 tier 단독 fallback |
+| metrics | array | 아래 BaselineMetric 목록. **비어 있으면 "비교 불가" 처리** |
+
+BaselineMetric: `metric`(`total_duration`(초)/`attempt_count`/`pivot_count`/`pause_ms@LABEL`), `percentiles`(`p10`~`p90`), `n_real`, `n_synthetic`, `data_source`(`observed` \| `estimated` — `n_real < 30`이면 `estimated`, 리포트에 "추정치 기반" 명시), `user_value`/`user_band`(세션 문맥 있을 때만, stats 엔드포인트에서는 null).
+
+> 데이터 출처: `backend/app.db`의 `baseline_cell` (AtCoder_100 실측 + IRT 합성 비교군, `app-db-ingestion-spec.md` §4).

@@ -8,6 +8,7 @@ from app.model import analysis as analysis_model
 from app.model import ingest as ingest_model
 from app.model import feedback as feedback_model
 from app.model import submission as submission_model
+from app.model import baseline as baseline_model
 
 from app.api import auth
 from app.api import problem as problem_api
