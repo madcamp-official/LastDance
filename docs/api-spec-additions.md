@@ -72,7 +72,7 @@
 
 ---
 
-## 요청 4 — `GET /feedback?session_id=X` (신규, 피드백 재조회)
+## 요청 4 — `GET /feedback?session_id=X` (신규, 피드백 재조회) (완료)
 
 | Method | Endpoint | 설명 | 응답 |
 |---|---|---|---|
