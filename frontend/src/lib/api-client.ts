@@ -1,4 +1,5 @@
 import type {
+  AnalysisPollResult,
   AuthTokens,
   CreateSessionRequest,
   CreateSubmissionRequest,
@@ -12,7 +13,9 @@ import type {
   ProblemDetail,
   ProblemListResponse,
   RefreshedToken,
-  Session,
+  SessionDetail,
+  SessionEndResult,
+  SessionStartResult,
   SignupRequest,
   Submission,
   SubmissionListResponse,
@@ -55,9 +58,9 @@ export interface IApiClient {
     get(problemId: number): Promise<ProblemDetail>
   }
   sessions: {
-    create(req: CreateSessionRequest): Promise<Session>
-    patch(sessionId: string, req: PatchSessionRequest): Promise<Session>
-    get(sessionId: string): Promise<Session>
+    create(req: CreateSessionRequest): Promise<SessionStartResult>
+    patch(sessionId: string, req: PatchSessionRequest): Promise<SessionEndResult>
+    get(sessionId: string): Promise<SessionDetail>
   }
   submissions: {
     create(req: CreateSubmissionRequest): Promise<CreateSubmissionResponse>
@@ -70,5 +73,9 @@ export interface IApiClient {
       feedbackId: string,
       rating: FeedbackRating,
     ): Promise<FeedbackRatingResponse>
+  }
+  /** GET /sessions/{id}/analysis. 세션 종료 후에만 의미 있는 데이터가 채워진다. */
+  analysis: {
+    get(sessionId: string): Promise<AnalysisPollResult>
   }
 }

@@ -1,4 +1,6 @@
 import type {
+  AnalysisPollResult,
+  AnalysisResult,
   AuthTokens,
   CreateSessionRequest,
   CreateSubmissionRequest,
@@ -12,7 +14,9 @@ import type {
   ProblemDetail,
   ProblemListResponse,
   RefreshedToken,
-  Session,
+  SessionDetail,
+  SessionEndResult,
+  SessionStartResult,
   SignupRequest,
   Submission,
   SubmissionListResponse,
@@ -27,7 +31,7 @@ interface StoredUser extends UserSummary {
 
 interface StoredProblem extends ProblemDetail {}
 
-interface StoredSession extends Session {}
+interface StoredSession extends SessionDetail {}
 
 interface StoredSubmission extends Submission {
   session_id: string
@@ -223,34 +227,51 @@ export function createMockApiClient(): IApiClient {
     },
 
     sessions: {
-      async create(req: CreateSessionRequest): Promise<Session> {
+      async create(req: CreateSessionRequest): Promise<SessionStartResult> {
         const userId = requireCurrentUserId()
+        const problem = db.problems.find((p) => p.problem_id === req.problem_id)
+        if (!problem) {
+          throw new ApiError(404, 'PROBLEM_NOT_FOUND', '문제를 찾을 수 없습니다.')
+        }
         const session: StoredSession = {
           session_id: genId('s'),
           user_id: userId,
           problem_id: req.problem_id,
-          language: req.language,
+          language: null,
           started_at: new Date().toISOString(),
           ended_at: null,
           status: 'active',
         }
         db.sessions.push(session)
         persist()
-        return session
+        return {
+          session_id: session.session_id,
+          problem_id: problem.problem_id,
+          user_id: userId,
+          title: problem.title,
+          statement: problem.statement,
+          constraints: problem.constraints,
+          examples: problem.examples,
+          source: problem.source,
+        }
       },
 
-      async patch(sessionId: string, req: PatchSessionRequest): Promise<Session> {
+      async patch(sessionId: string, req: PatchSessionRequest): Promise<SessionEndResult> {
         const session = db.sessions.find((s) => s.session_id === sessionId)
         if (!session) {
           throw new ApiError(404, 'SESSION_NOT_FOUND', '세션을 찾을 수 없습니다.')
         }
+        if (session.status !== 'active') {
+          throw new ApiError(409, 'SESSION_ALREADY_ENDED', '이미 종료된 세션입니다.')
+        }
         session.status = req.status
-        session.ended_at = req.ended_at ?? new Date().toISOString()
+        if (req.language) session.language = req.language
+        session.ended_at = new Date().toISOString()
         persist()
-        return session
+        return { session_id: session.session_id, status: session.status }
       },
 
-      async get(sessionId: string): Promise<Session> {
+      async get(sessionId: string): Promise<SessionDetail> {
         const session = db.sessions.find((s) => s.session_id === sessionId)
         if (!session) {
           throw new ApiError(404, 'SESSION_NOT_FOUND', '세션을 찾을 수 없습니다.')
@@ -263,17 +284,29 @@ export function createMockApiClient(): IApiClient {
       async create(
         req: CreateSubmissionRequest,
       ): Promise<CreateSubmissionResponse> {
+        // 실제 백엔드(Judge0 경유)는 동기 채점이라 항상 status: "judged"로 응답한다.
+        // mock도 동일한 흐름을 재현하기 위해 즉석에서 verdict를 합성한다(실제 실행은 하지 않음).
+        const verdict = Math.random() < 0.6 ? 'AC' : (['WA', 'RE', 'TLE'] as const)[Math.floor(Math.random() * 3)]
         const submission: StoredSubmission = {
           submission_id: genId('sub'),
           session_id: req.session_id,
           problem_id: req.problem_id,
-          status: 'pending',
-          verdict: null,
-          runtime_ms: null,
-          memory_kb: null,
+          status: 'judged',
+          verdict,
+          runtime_ms: verdict === 'AC' ? Math.round(50 + Math.random() * 400) : null,
+          memory_kb: verdict === 'AC' ? Math.round(8000 + Math.random() * 4000) : null,
           submitted_at: new Date().toISOString(),
         }
         db.submissions.push(submission)
+
+        if (verdict === 'AC') {
+          const session = db.sessions.find((s) => s.session_id === req.session_id)
+          if (session && session.status === 'active') {
+            session.status = 'solved'
+            session.language = req.language
+            session.ended_at = submission.submitted_at
+          }
+        }
         persist()
         const { submission_id, status, submitted_at } = submission
         return { submission_id, status, submitted_at }
@@ -315,7 +348,7 @@ export function createMockApiClient(): IApiClient {
           feedback_id: genId('f'),
           session_id: sessionId,
           text: '(mock) 아직 준비 중인 피드백입니다.',
-          model_used: 'qwen2.5-coder:7b',
+          model_used: 'qwen3-coder:30b-a3b',
           generated_at: new Date().toISOString(),
         }
         db.feedback.push(feedback)
@@ -335,5 +368,116 @@ export function createMockApiClient(): IApiClient {
         return { feedback_id: feedbackId, rating }
       },
     },
+
+    analysis: {
+      async get(sessionId: string): Promise<AnalysisPollResult> {
+        const session = db.sessions.find((s) => s.session_id === sessionId)
+        if (!session) {
+          throw new ApiError(404, 'ANALYSIS_NOT_FOUND', '분석 결과가 없습니다.')
+        }
+        // 실제 Replay Worker는 session.end 수신 후에만 비동기로 결과를 채운다.
+        // mock은 워커가 없으므로, 세션이 아직 진행 중이면 "처리 중"으로 흉내만 낸다.
+        if (session.status === 'active') {
+          return { status: 'processing' }
+        }
+        return { session_id: sessionId, result: synthesizeMockAnalysis(sessionId) }
+      },
+    },
+  }
+}
+
+// sessionId를 시드로 한 결정적 pseudo-random — 새로고침해도 같은 세션은 같은 분석 결과를 보여준다.
+function seededRandom(seed: string): () => number {
+  let h = 0
+  for (let i = 0; i < seed.length; i++) {
+    h = (Math.imul(31, h) + seed.charCodeAt(i)) | 0
+  }
+  return () => {
+    h = (Math.imul(1103515245, h) + 12345) | 0
+    return ((h >>> 1) % 10000) / 10000
+  }
+}
+
+const MOCK_PATTERNS = ['BFS', 'DFS_ITERATIVE', 'BINARY_SEARCH', 'DP', 'GREEDY'] as const
+const MOCK_AST_LABELS = [
+  'INTERFACE_DESIGN',
+  'LOOP_BOUNDARY',
+  'BRANCH_CONDITION',
+  'INDEX_REASONING',
+  'ALGORITHM_ENTRY',
+] as const
+const MOCK_PIVOT_TYPES = ['APPROACH_SWITCH', 'COMPLEXITY_FIX', 'EDGE_CASE_FIX'] as const
+const MOCK_PHASES = ['SETUP', 'FORMATION', 'DEBUG', 'REFINE'] as const
+
+function synthesizeMockAnalysis(sessionId: string): AnalysisResult {
+  const rand = seededRandom(sessionId)
+  const pick = <T,>(arr: readonly T[]) => arr[Math.floor(rand() * arr.length)]
+
+  const setupMs = Math.round(10000 + rand() * 20000)
+  const formationMs = Math.round(20000 + rand() * 40000)
+  const debugMs = Math.round(10000 + rand() * 30000)
+  const refineMs = Math.round(5000 + rand() * 15000)
+  const totalMs = setupMs + formationMs + debugMs + refineMs
+
+  const pauseCount = 2 + Math.floor(rand() * 4)
+  const pauses = Array.from({ length: pauseCount }, (_, i) => {
+    const duration_ms = Math.round(1000 + rand() * 8000)
+    return {
+      event_index: -1,
+      t_ms: Math.round((totalMs * (i + 1)) / (pauseCount + 1)),
+      duration_ms,
+      ast_label: pick(MOCK_AST_LABELS),
+      pattern: rand() > 0.4 ? pick(MOCK_PATTERNS) : '',
+      phase: pick(MOCK_PHASES),
+    }
+  })
+  const pauseTotalMs = pauses.reduce((sum, p) => sum + p.duration_ms, 0)
+
+  const pivotCount = Math.floor(rand() * 3)
+  const pivots = Array.from({ length: pivotCount }, (_, i) => ({
+    start_index: -1,
+    end_index: -1,
+    rewrite_horizon: -1,
+    t_ms: Math.round((totalMs * (i + 1)) / (pivotCount + 1)),
+    deleted_chars: Math.round(10 + rand() * 100),
+    pivot_type: pick(MOCK_PIVOT_TYPES),
+    pattern: rand() > 0.5 ? pick(MOCK_PATTERNS) : '',
+  }))
+
+  const windowCount = 1 + Math.floor(rand() * 2)
+  const usedPatterns = new Set<string>()
+  const patternWindows = Array.from({ length: windowCount }, (_, i) => {
+    const pattern = pick(MOCK_PATTERNS)
+    usedPatterns.add(pattern)
+    const t_start_ms = Math.round((totalMs * i) / windowCount)
+    const formation_ms = Math.round(5000 + rand() * 15000)
+    return {
+      pattern,
+      t_start_ms,
+      t_complete_ms: t_start_ms + formation_ms,
+      formation_ms,
+      pause_ms_in_window: Math.round(rand() * 3000),
+      pivot_count_in_window: Math.floor(rand() * 2),
+    }
+  })
+
+  return {
+    analysis_level: 'full',
+    matcher_version: 1,
+    total_ms: totalMs,
+    setup_ms: setupMs,
+    formation_ms: formationMs,
+    debug_ms: debugMs,
+    refine_ms: refineMs,
+    keystroke_count: Math.round(300 + rand() * 900),
+    pause_total_ms: pauseTotalMs,
+    pause_count: pauseCount,
+    pivot_count: pivotCount,
+    code_bytes: Math.round(300 + rand() * 800),
+    final_code: '',
+    pauses,
+    pivots,
+    pattern_windows: patternWindows,
+    patterns_detected: Array.from(usedPatterns).sort(),
   }
 }

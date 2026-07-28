@@ -1,4 +1,5 @@
 import type {
+  AnalysisPollResult,
   ApiErrorBody,
   AuthTokens,
   CreateSessionRequest,
@@ -13,7 +14,9 @@ import type {
   ProblemDetail,
   ProblemListResponse,
   RefreshedToken,
-  Session,
+  SessionDetail,
+  SessionEndResult,
+  SessionStartResult,
   SignupRequest,
   Submission,
   SubmissionListResponse,
@@ -149,19 +152,19 @@ export function createHttpApiClient(config: HttpApiClientConfig): IApiClient {
 
     sessions: {
       create(req: CreateSessionRequest) {
-        return request<Session>('/sessions', {
+        return request<SessionStartResult>('/sessions', {
           method: 'POST',
           body: JSON.stringify(req),
         })
       },
       patch(sessionId: string, req: PatchSessionRequest) {
-        return request<Session>(`/sessions/${sessionId}`, {
+        return request<SessionEndResult>(`/sessions/${sessionId}`, {
           method: 'PATCH',
           body: JSON.stringify(req),
         })
       },
       get(sessionId: string) {
-        return request<Session>(`/sessions/${sessionId}`)
+        return request<SessionDetail>(`/sessions/${sessionId}`)
       },
     },
 
@@ -197,6 +200,14 @@ export function createHttpApiClient(config: HttpApiClientConfig): IApiClient {
             body: JSON.stringify({ rating }),
           },
         )
+      },
+    },
+
+    analysis: {
+      get(sessionId: string) {
+        // 200(완료)과 202(처리 중)는 둘 다 res.ok라 그대로 유니온으로 반환.
+        // 404(ANALYSIS_NOT_FOUND)는 request()가 ApiError로 던진다 — 호출부에서 처리.
+        return request<AnalysisPollResult>(`/sessions/${sessionId}/analysis`)
       },
     },
   }

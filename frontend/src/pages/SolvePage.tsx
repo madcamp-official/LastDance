@@ -7,9 +7,10 @@ import { useAuthStore } from '../store/authStore'
 import { useMonacoActivityLogger } from '../hooks/useMonacoActivityLogger'
 import { CodeEditor } from '../components/Editor/CodeEditor'
 import { FeedbackPanel } from '../components/Feedback/FeedbackPanel'
+import { AnalysisPanel } from '../components/Analysis/AnalysisPanel'
 import { ComparisonStatsWidget } from '../components/Stats/ComparisonStatsWidget'
 import { SUPPORTED_LANGUAGES } from '../lib/languages'
-import type { Session, SubmissionStatus } from '../types/api'
+import type { SessionDetail, Submission } from '../types/api'
 
 // 문제별 진행 중인 세션 id를 기억해, 새로고침해도 같은 세션을 이어서 보여준다.
 // (api-spec.md에 problem_id로 세션을 조회하는 엔드포인트가 없어 세션 id 자체를 클라이언트에 보관해야 함)
@@ -23,27 +24,41 @@ function codeStorageKey(problemId: string) {
   return `lastdance_code_${problemId}`
 }
 
+const VERDICT_LABEL: Record<string, string> = {
+  AC: '정답',
+  WA: '오답',
+  TLE: '시간 초과',
+  RE: '런타임 에러',
+  CE: '컴파일 에러',
+}
+
 export function SolvePage() {
   const { problemId } = useParams<{ problemId: string }>()
   const numericProblemId = problemId ? Number(problemId) : NaN
-  const accessToken = useAuthStore((s) => s.accessToken)
 
   const [language, setLanguage] = useState<string>(SUPPORTED_LANGUAGES[0].value)
-  const [session, setSession] = useState<Session | null>(null)
+  const [session, setSession] = useState<SessionDetail | null>(null)
+  const [problemTitle, setProblemTitle] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
   const [startError, setStartError] = useState<string | null>(null)
 
   const [code, setCode] = useState('')
-  const [submissionId, setSubmissionId] = useState<string | null>(null)
-  const [submissionStatus, setSubmissionStatus] = useState<SubmissionStatus | null>(null)
+  const [submission, setSubmission] = useState<Submission | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [ending, setEnding] = useState(false)
 
-  const { attachEditor } = useMonacoActivityLogger(
-    session?.session_id ?? null,
-    accessToken,
-  )
+  const {
+    attachEditor,
+    markSubmission,
+    endSession: endKeystrokeLogging,
+  } = useMonacoActivityLogger({
+    sessionId: session?.session_id ?? null,
+    problemId: Number.isNaN(numericProblemId) ? null : numericProblemId,
+    language,
+    // 매 (재)연결 시점에 최신 토큰을 읽도록 함수로 전달 — accessToken이 갱신돼도 재연결 불필요.
+    getAccessToken: () => useAuthStore.getState().accessToken,
+  })
 
   // 새로고침 시 이 문제에 대해 진행 중이던(또는 마지막) 세션이 있으면 이어서 복원한다.
   useEffect(() => {
@@ -57,19 +72,24 @@ export function SolvePage() {
         const restored = await apiClient.sessions.get(storedSessionId)
         if (cancelled) return
         setSession(restored)
-        setLanguage(restored.language)
+        if (restored.language) setLanguage(restored.language)
+
+        apiClient.problems
+          .get(Number(problemId))
+          .then((p) => {
+            if (!cancelled) setProblemTitle(p.title)
+          })
+          .catch(() => {})
 
         const savedCode = localStorage.getItem(codeStorageKey(problemId))
         if (savedCode !== null) setCode(savedCode)
 
-        const submissions = await apiClient.submissions.listBySession(
-          restored.session_id,
-        )
+        const submissions = await apiClient.submissions.listBySession(restored.session_id)
         if (cancelled) return
         const latest = submissions.items.at(-1)
         if (latest) {
-          setSubmissionId(latest.submission_id)
-          setSubmissionStatus(latest.status)
+          const detail = await apiClient.submissions.get(latest.submission_id)
+          if (!cancelled) setSubmission(detail)
         }
       } catch {
         // 저장된 세션을 더 이상 찾을 수 없으면(만료/삭제 등) 참조를 지우고 시작 화면으로 둔다.
@@ -88,12 +108,20 @@ export function SolvePage() {
     setStarting(true)
     setStartError(null)
     try {
-      const created = await apiClient.sessions.create({
-        problem_id: numericProblemId,
-        language,
+      const created = await apiClient.sessions.create({ problem_id: numericProblemId })
+      // POST /sessions 응답엔 status/started_at이 없다 — 방금 만든 세션이므로 로컬에서 채운다.
+      setSession({
+        session_id: created.session_id,
+        user_id: created.user_id,
+        problem_id: created.problem_id,
+        language: null,
+        started_at: new Date().toISOString(),
+        ended_at: null,
+        status: 'active',
       })
-      setSession(created)
+      setProblemTitle(created.title)
       setCode('')
+      setSubmission(null)
       localStorage.setItem(sessionStorageKey(problemId), created.session_id)
       localStorage.removeItem(codeStorageKey(problemId))
     } catch (err) {
@@ -112,8 +140,7 @@ export function SolvePage() {
     }
     setSession(null)
     setCode('')
-    setSubmissionId(null)
-    setSubmissionStatus(null)
+    setSubmission(null)
     setSubmitError(null)
   }
 
@@ -131,14 +158,24 @@ export function SolvePage() {
     setSubmitting(true)
     setSubmitError(null)
     try {
-      const res = await apiClient.submissions.create({
+      const created = await apiClient.submissions.create({
         session_id: session.session_id,
         problem_id: numericProblemId,
         code,
         language,
       })
-      setSubmissionId(res.submission_id)
-      setSubmissionStatus(res.status)
+      markSubmission(created.submission_id)
+
+      // 채점이 동기로 끝나므로(백엔드가 Judge0을 기다렸다 응답) 곧바로 verdict를 조회할 수 있다.
+      const detail = await apiClient.submissions.get(created.submission_id)
+      setSubmission(detail)
+
+      // AC면 백엔드가 세션을 자동으로 종료한다 — 최신 상태를 다시 받아 반영한다.
+      const refreshed = await apiClient.sessions.get(session.session_id)
+      setSession(refreshed)
+      if (session.status === 'active' && refreshed.status !== 'active') {
+        endKeystrokeLogging('submitted_ac')
+      }
     } catch (err) {
       setSubmitError(err instanceof ApiError ? err.message : '제출하지 못했습니다.')
     } finally {
@@ -146,22 +183,13 @@ export function SolvePage() {
     }
   }
 
-  async function handleRefreshSubmission() {
-    if (!submissionId) return
-    try {
-      const res = await apiClient.submissions.get(submissionId)
-      setSubmissionStatus(res.status)
-    } catch {
-      // 조회 실패 시 조용히 무시 — 새로고침 버튼으로 재시도 가능
-    }
-  }
-
-  async function handleEndSession(status: 'solved' | 'unsolved' | 'abandoned') {
+  async function handleEndSession(status: 'solved' | 'abandoned') {
     if (!session) return
     setEnding(true)
     try {
-      const updated = await apiClient.sessions.patch(session.session_id, { status })
-      setSession(updated)
+      await apiClient.sessions.patch(session.session_id, { status, language })
+      setSession({ ...session, status, ended_at: new Date().toISOString() })
+      endKeystrokeLogging()
     } catch {
       // 종료 실패 — 버튼을 다시 눌러 재시도 가능하도록 세션 상태를 그대로 유지
     } finally {
@@ -212,6 +240,11 @@ export function SolvePage() {
       <div className="flex flex-col gap-3">
         <div className="flex items-center justify-between">
           <span className="text-sm text-gray-500">
+            {problemTitle && (
+              <span className="font-medium text-gray-700 dark:text-gray-300">
+                {problemTitle} ·{' '}
+              </span>
+            )}
             언어: {languageLabel} · 세션 상태: {session.status}
           </span>
           {!isEnded && (
@@ -259,21 +292,26 @@ export function SolvePage() {
             disabled={submitting || isEnded}
             className="rounded-md bg-indigo-600 px-4 py-2 font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
           >
-            {submitting ? '제출 중...' : '제출'}
+            {submitting ? '채점 중...' : '제출'}
           </button>
-          {submissionId && (
-            <>
-              <span className="text-sm text-gray-500">
-                제출 상태: {submissionStatus} ({submissionId})
-              </span>
-              <button
-                type="button"
-                onClick={handleRefreshSubmission}
-                className="text-sm text-indigo-600 hover:underline"
-              >
-                새로고침
-              </button>
-            </>
+          {submission && (
+            <span className="text-sm text-gray-500">
+              {submission.verdict ? (
+                <span
+                  className={
+                    submission.verdict === 'AC'
+                      ? 'font-medium text-emerald-600'
+                      : 'font-medium text-red-600'
+                  }
+                >
+                  {VERDICT_LABEL[submission.verdict] ?? submission.verdict}
+                </span>
+              ) : (
+                '채점 중'
+              )}
+              {submission.runtime_ms != null && ` · ${submission.runtime_ms}ms`}
+              {submission.memory_kb != null && ` · ${submission.memory_kb}KB`}
+            </span>
           )}
         </div>
         {submitError && <p className="text-sm text-red-600">{submitError}</p>}
@@ -281,6 +319,7 @@ export function SolvePage() {
 
       <div className="flex flex-col gap-4">
         <FeedbackPanel sessionId={session.session_id} />
+        <AnalysisPanel sessionId={session.session_id} enabled={isEnded} />
         <ComparisonStatsWidget />
       </div>
     </div>
