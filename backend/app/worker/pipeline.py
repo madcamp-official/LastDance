@@ -33,7 +33,7 @@ IDLE_GAP_MS = 30 * 60 * 1000        # 30분 이상 무편집 구간은 총 시�
 
 # 패턴 매칭을 지원하는 언어 (그 외 파서 보유 언어는 라벨링까지만도 가능하지만,
 # 계획서 §4.1 Step 1에 따라 미지원은 일괄 timing_only로 강등)
-_FULL_LANGS = {"cpp17", "python3"}
+_FULL_LANGS = {"cpp", "python"}
 
 
 def _edit_focus_char(ev: EditOp) -> int:
