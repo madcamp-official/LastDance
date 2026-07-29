@@ -53,13 +53,17 @@ class PatternWindowResult(BaseModel):
 # LLM 입력용이지만 생성은 전 구간 결정론적. 원본 코드/식별자 텍스트는 넣지 않는다.
 class DiffEvent(BaseModel):
     t_ms: int
-    op: Literal["insert", "delete"]
+    # GumTree/ChangeDistiller류 표준 편집 연산 (addendum §3). update는 노드 라벨
+    # (식별자 텍스트) 변경인데 이 파이프라인은 이름-무관이라 라벨을 아예 안 보므로 없음.
+    op: Literal["insert", "delete", "move"]
     node_type: str
-    parent_type: str = ""
-    depth: int = 0
+    parent_type: str = ""           # 가장 가까운 '구조' 조상 타입 (compound 등 중간 노드 제외)
+    depth: int = 0                  # 구조 조상 기준 깊이 (addendum §3 예시와 동일 눈금)
     subtree_hash: str = ""
     size_nodes: int = 0
     callee_is_self: bool = False    # 재귀 판정용: 이름 대신 불리언만 전달
+    from_parent: str = ""           # move 전용
+    to_parent: str = ""             # move 전용
 
 
 class SubtreeShape(BaseModel):
@@ -67,6 +71,7 @@ class SubtreeShape(BaseModel):
     child_types_multiset: List[str] = []
     max_depth: int = 0
     has_self_call: bool = False
+    has_visited_array_pattern: bool = False  # Step 5 규칙 불리언 피처 재사용 (addendum §3)
 
 
 class UnmatchedSegment(BaseModel):

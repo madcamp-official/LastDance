@@ -14,6 +14,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
+from app.llm.client import LLM_MODEL
 from app.main import app
 from app.model.problem import Problem
 from fastapi.testclient import TestClient
@@ -96,14 +97,15 @@ def run() -> None:
     check("POST /feedback -> 200", r.status_code == 200, f"status={r.status_code} body={r.text}")
     body = r.json() if r.status_code == 200 else {}
     check("POST /feedback 응답에 feedback_id 존재", "feedback_id" in body, str(body))
+    # LLM 서버 미가용 환경에서는 fallback 문구가, 가용 환경에서는 생성 텍스트가 온다.
     check(
-        "POST /feedback text == spec mock 문구",
-        body.get("text") == "(mock) 아직 준비 중인 피드백입니다.",
+        "POST /feedback text 비어있지 않음",
+        isinstance(body.get("text"), str) and len(body["text"]) > 0,
         str(body.get("text")),
     )
     check(
-        "POST /feedback model_used == qwen2.5-coder:7b",
-        body.get("model_used") == "qwen2.5-coder:7b",
+        f"POST /feedback model_used == {LLM_MODEL}",
+        body.get("model_used") == LLM_MODEL,
         str(body.get("model_used")),
     )
     check(

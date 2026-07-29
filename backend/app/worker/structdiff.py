@@ -1,13 +1,16 @@
 """Structural Diff Extractor (llm-structural-classifier-addendum.md §2~§3).
 
 세션 종료 시점에 1회 실행되는 결정론적 단계. 디바운스된 매처 실행 시점마다
-캡처한 구조 스냅샷들 사이의 GumTree식 diff(insert/delete)를 계산하고,
+캡처한 구조 스냅샷들 사이의 GumTree식 diff(insert/delete/move)를 계산하고,
 규칙 매처(Step 5)가 어떤 패턴 윈도우에도 귀속시키지 못한 시간 구간을
 UNMATCHED 세그먼트로 묶는다.
 
-LLM에는 여기서 만든 구조 이벤트만 전달된다 — 노드 타입, 트리 깊이,
+LLM에는 여기서 만든 구조 이벤트만 전달된다 — 노드 타입, 구조 조상 경로,
 서브트리 해시, 크기, 시각뿐이며 원본 코드/식별자 텍스트는 포함하지 않는다.
 (재귀 판정용 callee_is_self는 이름 대신 불리언만 전달)
+
+parent_type/depth는 addendum §3 예시와 같은 눈금을 쓴다: compound_statement 같은
+중간 노드를 건너뛰고 가장 가까운 '구조' 조상(_STRUCT_TYPES)을 부모로 본다.
 """
 
 from collections import Counter
@@ -26,6 +29,8 @@ _STRUCT_TYPES = {
     "assignment_expression", "assignment", "augmented_assignment",
     "declaration", "return_statement",
 }
+_ASSIGN_TYPES = {"assignment_expression", "assignment", "augmented_assignment"}
+_SUBSCRIPT_TYPES = {"subscript_expression", "subscript"}
 
 _HASH_LEN = 6            # addendum §3 예시와 동일한 축약 해시 길이
 SEGMENT_GAP_MS = 30_000  # 이보다 diff 이벤트 간격이 벌어지면 세그먼트 분리
@@ -59,6 +64,42 @@ def _function_names(root, source: bytes) -> set:
     return names
 
 
+def _struct_ancestry(n) -> Tuple[str, int]:
+    """(가장 가까운 구조 조상 타입, 구조 조상 개수 + 1 = depth).
+
+    addendum §3 예시: function_definition 안의 while_statement가 depth=2,
+    그 while 안의 call_expression이 depth=3.
+    """
+    parent_type = ""
+    depth = 1
+    cursor = n.parent
+    while cursor is not None:
+        if cursor.type in _STRUCT_TYPES:
+            if not parent_type:
+                parent_type = cursor.type
+            depth += 1
+        cursor = cursor.parent
+    if not parent_type:
+        # 구조 조상이 없으면 트리 루트(translation_unit/module)를 부모로
+        root = n
+        while root.parent is not None:
+            root = root.parent
+        parent_type = root.type if root is not n else ""
+    return parent_type, depth
+
+
+def _has_visited_array_pattern(root) -> bool:
+    """Step 5 규칙(BFS 방문 배열/DFS 방문 마킹)에서 쓰는 불리언 피처:
+    배열 원소 대입(subscript LHS assignment)이 존재하는가."""
+    for n in walk_nodes(root):
+        if n.type not in _ASSIGN_TYPES:
+            continue
+        left = n.child_by_field_name("left")
+        if left is not None and left.type in _SUBSCRIPT_TYPES:
+            return True
+    return False
+
+
 class ShapeSnapshot:
     """매처 실행 시점의 구조 노드 multiset. diff 계산에만 쓰인다."""
 
@@ -71,11 +112,7 @@ class ShapeSnapshot:
         for n in walk_nodes(root):
             if n.type not in _STRUCT_TYPES:
                 continue
-            depth = 0
-            cursor = n.parent
-            while cursor is not None:
-                depth += 1
-                cursor = cursor.parent
+            parent_type, depth = _struct_ancestry(n)
             callee_is_self = False
             if n.type in ("call_expression", "call"):
                 fn = n.child_by_field_name("function")
@@ -83,7 +120,7 @@ class ShapeSnapshot:
             self.entries.append(
                 ShapeEntry(
                     node_type=n.type,
-                    parent_type=n.parent.type if n.parent is not None else "",
+                    parent_type=parent_type,
                     depth=depth,
                     subtree_hash=structure_sketch(n)[:_HASH_LEN],
                     size_nodes=sum(1 for _ in walk_nodes(n)),
@@ -92,12 +129,53 @@ class ShapeSnapshot:
             )
 
 
+def _move_key(e: ShapeEntry) -> Tuple[str, str, int, bool]:
+    """move 판정 키: 동일 구조 서브트리(타입+해시+크기)가 위치만 바뀐 경우."""
+    return (e.node_type, e.subtree_hash, e.size_nodes, e.callee_is_self)
+
+
 def diff_snapshots(before: Optional[ShapeSnapshot], after: ShapeSnapshot, t_ms: int) -> List[DiffEvent]:
-    """두 스냅샷 사이 구조 변화를 insert/delete 이벤트로 (결정론적 순서)."""
+    """두 스냅샷 사이 구조 변화를 insert/delete/move 이벤트로 (결정론적 순서).
+
+    GumTree식 move: 동일 (node_type, subtree_hash, size) 서브트리가 삭제측과
+    삽입측에 동시에 있으면 위치 이동으로 본다 (addendum §3 move 예시).
+    """
     b = Counter(before.entries if before is not None else [])
     a = Counter(after.entries)
+    inserted = a - b
+    deleted = b - a
+
+    # ---- move 짝짓기 ----
+    ins_by_key: dict = {}
+    for e in sorted(inserted):
+        ins_by_key.setdefault(_move_key(e), []).extend([e] * inserted[e])
+    del_by_key: dict = {}
+    for e in sorted(deleted):
+        del_by_key.setdefault(_move_key(e), []).extend([e] * deleted[e])
+
+    moves: List[DiffEvent] = []
+    for key in sorted(ins_by_key.keys() & del_by_key.keys()):
+        ins_list, del_list = ins_by_key[key], del_by_key[key]
+        for e_del, e_ins in zip(del_list, ins_list):
+            moves.append(
+                DiffEvent(
+                    t_ms=t_ms,
+                    op="move",
+                    node_type=e_ins.node_type,
+                    parent_type=e_ins.parent_type,
+                    depth=e_ins.depth,
+                    subtree_hash=e_ins.subtree_hash,
+                    size_nodes=e_ins.size_nodes,
+                    callee_is_self=e_ins.callee_is_self,
+                    from_parent=e_del.parent_type,
+                    to_parent=e_ins.parent_type,
+                )
+            )
+            inserted[e_ins] -= 1
+            deleted[e_del] -= 1
+
     events: List[DiffEvent] = []
-    for op, delta in (("insert", a - b), ("delete", b - a)):
+    for op, delta in (("insert", +inserted), ("delete", +deleted)):  # +Counter: 0 이하 제거
         for e in sorted(delta):
             for _ in range(delta[e]):
                 events.append(
@@ -112,37 +190,40 @@ def diff_snapshots(before: Optional[ShapeSnapshot], after: ShapeSnapshot, t_ms: 
                         callee_is_self=e.callee_is_self,
                     )
                 )
-    return events
+    return events + moves
 
 
 def final_subtree_shape(tree, source: bytes) -> Optional[SubtreeShape]:
-    """세션 종료 시점 트리의 이름-무관 요약 (addendum §3 final_subtree_shape)."""
+    """세션 종료 시점 트리의 이름-무관 요약 (addendum §3 final_subtree_shape).
+
+    addendum 예시처럼 함수가 있으면 가장 큰 function_definition을 shape 루트로 삼는다.
+    """
     if tree is None:
         return None
     root = tree.root_node
+    funcs = [n for n in walk_nodes(root) if n.type == "function_definition"]
+    shape_root = max(funcs, key=lambda n: (n.end_byte - n.start_byte, -n.start_byte)) if funcs else root
+
+    func_names = _function_names(root, source)
     child_types: List[str] = []
     max_depth = 0
     has_self_call = False
-    func_names = _function_names(root, source)
-    for n in walk_nodes(root):
-        if n.type not in _STRUCT_TYPES:
+    for n in walk_nodes(shape_root):
+        if n is shape_root or n.type not in _STRUCT_TYPES:
             continue
         child_types.append(n.type)
-        depth = 0
-        cursor = n.parent
-        while cursor is not None:
-            depth += 1
-            cursor = cursor.parent
+        _, depth = _struct_ancestry(n)
         max_depth = max(max_depth, depth)
         if n.type in ("call_expression", "call"):
             fn = n.child_by_field_name("function")
             if fn is not None and node_text(fn, source) in func_names:
                 has_self_call = True
     return SubtreeShape(
-        root_type=root.type,
+        root_type=shape_root.type,
         child_types_multiset=sorted(child_types)[:30],
         max_depth=max_depth,
         has_self_call=has_self_call,
+        has_visited_array_pattern=_has_visited_array_pattern(shape_root),
     )
 
 
