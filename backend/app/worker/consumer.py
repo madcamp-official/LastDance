@@ -166,16 +166,17 @@ async def _finalize_worker() -> None:
                         problem_id=str(buf.problem_id),
                         total_duration_ms=result.total_ms,
                     )
-                    if candidates:
-                        db = SessionLocal()
-                        try:
-                            save_llm_candidates(
-                                db, sid=sid, user_id=buf.user_id, problem_id=buf.problem_id,
-                                segments=result.unmatched_segments, results=candidates,
-                                classifier_version=CLASSIFIER_VERSION,
-                            )
-                        finally:
-                            db.close()
+                    # 후보 0건이어도 호출: 세그먼트 상태를 discarded로 전이해
+                    # grounding 실패율(M3.5) 집계에 반영한다. LLM 미가용 시에만 pending 유지.
+                    db = SessionLocal()
+                    try:
+                        save_llm_candidates(
+                            db, sid=sid, user_id=buf.user_id, problem_id=buf.problem_id,
+                            segments=result.unmatched_segments, results=candidates,
+                            classifier_version=CLASSIFIER_VERSION,
+                        )
+                    finally:
+                        db.close()
                 except LLMUnavailable as exc:
                     logger.warning("구조 분류기 LLM 연결 실패 (sid=%s): %s — UNMATCHED 유지", sid, exc)
                 except Exception:

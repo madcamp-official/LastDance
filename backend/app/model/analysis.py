@@ -78,3 +78,31 @@ class PatternWindowRow(Base):
     classifier_version = Column(String, nullable=True)   # 프롬프트+모델 버전 (백필 기준)
     confidence = Column(Float, nullable=True)
     proposed_label = Column(String, nullable=True)       # pattern="OTHER"일 때 LLM 제안 라벨 (주 1회 검수 대상)
+
+
+class UnmatchedSegmentRow(Base):
+    """규칙 매처가 못 덮은 구조 변화 구간 (addendum §2~§3).
+
+    diff 이벤트를 JSON으로 영속화해서
+      - LLM 분류 실패/미가용 시에도 구간이 UNMATCHED로 남고 (§6.5)
+      - classifier_version이 바뀌면 raw 재생 없이 재분류 백필이 가능하며 (§7)
+      - UNMATCHED 비율(M3)·grounding 실패율(M3.5) 메트릭을 계산할 수 있다 (§8).
+    상태 전이: pending(분류 전/LLM 미가용) → classified(후보 채택) | discarded(검증 최종 실패·저신뢰).
+    """
+    __tablename__ = "unmatched_segments"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    sid = Column(String, index=True, nullable=False)
+    user_id = Column(String, index=True, nullable=False)
+    problem_id = Column(Integer, index=True, nullable=False)
+    segment_id = Column(String, nullable=False)          # "seg_0" 등, sid 내 유일
+    t_start_ms = Column(Integer, nullable=False)
+    t_end_ms = Column(Integer, nullable=False)
+    diff_events_json = Column(String, nullable=False, default="[]")
+    final_shape_json = Column(String, nullable=True)
+    status = Column(String, nullable=False, default="pending", server_default="pending", index=True)
+    pattern = Column(String, nullable=True)              # classified일 때 채택 라벨
+    proposed_label = Column(String, nullable=True)
+    confidence = Column(Float, nullable=True)
+    classifier_version = Column(String, nullable=True)   # 마지막으로 시도한 분류기 버전
+    created_at = Column(DateTime(timezone=True), nullable=True)
