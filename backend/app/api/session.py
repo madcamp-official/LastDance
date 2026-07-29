@@ -55,18 +55,31 @@ async def start_session(
     if not problem:
         raise APIError(status.HTTP_404_NOT_FOUND, "PROBLEM_NOT_FOUND", "문제를 찾을 수 없습니다.")
 
-    sub = Submission(
-        session_id=str(uuid.uuid4()),
-        problem_id=problem.problem_id,
-        user_id=current_user.user_id,
-        language=None,
-        started_at=datetime.now(tz=UTC),
-        ended_at=None,
-        final_status=None,  # 진행 중 = active (ended_at으로 판별)
+    # 같은 유저/문제에 이미 active(final_status None) 세션 있으면 새로 만들지 않고 재사용.
+    sub = (
+        db.query(Submission)
+        .filter(
+            Submission.user_id == current_user.user_id,
+            Submission.problem_id == problem.problem_id,
+            Submission.final_status.is_(None),
+        )
+        .order_by(Submission.started_at.desc())
+        .first()
     )
-    db.add(sub)
-    db.commit()
-    db.refresh(sub)
+
+    if sub is None:
+        sub = Submission(
+            session_id=str(uuid.uuid4()),
+            problem_id=problem.problem_id,
+            user_id=current_user.user_id,
+            language=None,
+            started_at=datetime.now(tz=UTC),
+            ended_at=None,
+            final_status=None,  # 진행 중 = active (ended_at으로 판별)
+        )
+        db.add(sub)
+        db.commit()
+        db.refresh(sub)
 
     return SessionStartResponse(
         session_id=sub.session_id,
