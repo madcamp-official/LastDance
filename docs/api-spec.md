@@ -84,7 +84,7 @@ ID 표기: `problem_id`는 `db-schema.md`의 `problems.id`(BIGSERIAL) 그대로 
 | Method | Endpoint | 설명 | 요청 (Query/Body) | 응답 |
 |---|---|---|---|---|
 | GET | `/problems` | 문제 목록 조회 | Query: `?page=1&page_size=20` | 200 `{"items": [{"problem_id": 1, "title": "Welcome to AtCoder"}], "page": 1, "page_size": 20, "total_count": 128}` |
-| GET | `/problems/{problem_id}` | 문제 상세 조회 | - | 200 `{"problem_id": 1, "title": "Welcome to AtCoder", "statement": "You are given...", "constraints": "1<=a,b,c<=1000", "examples": [{"input": "1\n2 3\n", "output": "6"}], "source": "codenet_atcoder"}` |
+| GET | `/problems/{problem_id}` | 문제 상세 조회 | - | 200 `{"problem_id": 1, "title": "Welcome to AtCoder", "statement": "You are given...", "constraints": "1<=a,b,c<=1000", "examples": [{"input": "1\n2 3\n", "output": "6"}], "source": "codenet_atcoder", "time_limit": "1 sec", "memory_limit": "1024MB"}` |
 
 **GET /problems** 요청 쿼리:
 | 키 | 타입 | 필수 | 예시 | 설명 |
@@ -115,6 +115,8 @@ ID 표기: `problem_id`는 `db-schema.md`의 `problems.id`(BIGSERIAL) 그대로 
 | examples[].input | string | `"1\n2 3\n"` | |
 | examples[].output | string | `"6"` | |
 | source | string | `"codenet_atcoder"` | |
+|time_limit|str|`"1 sec"`|코드 실행 시간 제한|
+|memory_limit|str|`"1024MB"`|실행 메모리 제한|
 
 에러: 404 `{"error": {"code": "PROBLEM_NOT_FOUND", "message": "문제를 찾을 수 없습니다."}}`
 
