@@ -109,6 +109,8 @@ async def get_problem(problem_id: int, db: Session = Depends(get_db)):
         examples=problem.examples or [],
         source=problem.source,
         difficulty=problem.difficulty,
+        time_limit=problem.time_limit,
+        memory_limit=problem.memory_limit,
     )
 
 

@@ -17,3 +17,6 @@ class Problem(Base):
     testcase_dir = Column(String, nullable=True)
     # 난이도 티어 NULL|"A".."G" (A=가장 쉬움, G=가장 어려움). keystroke-analysis-dev-plan.md §5.1 Enum8('A'..'G') 재사용.
     difficulty = Column(String, nullable=True)
+    # AtCoder_100/problem_list.csv time_limit(ms)/memory_limit(KB)를 api-spec.md 표시 형식으로 변환해 저장 (예: "2 sec", "1024MB")
+    time_limit = Column(String, nullable=True)
+    memory_limit = Column(String, nullable=True)
