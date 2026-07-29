@@ -11,14 +11,15 @@ Ingest Gateway(app/api/ingest.py)는 검증·중복제거·append만 하고 분�
 import asyncio
 import json
 import logging
-from typing import Dict, List, Optional
+from concurrent.futures import ProcessPoolExecutor
+from typing import Dict, List, Optional, Tuple
 
 from aiokafka import AIOKafkaConsumer
 
 from app.database import SessionLocal
 from app.model.ingest import IngestSessionState
 from app.model.session import Submission
-from app.schema.analysis import EditOp
+from app.schema.analysis import AnalysisResult, EditOp
 from app.util.messaging import KAFKA_BOOTSTRAP_SERVERS, KAFKA_TOPIC
 from app.worker.pipeline import analyze_session
 from app.worker.rawstore import write_raw_blob
@@ -27,6 +28,16 @@ from app.worker.store import save_analysis
 logger = logging.getLogger(__name__)
 
 CONSUMER_GROUP_ID = "replay-worker-v1"
+
+# session.end 하나당 analyze_session(tree-sitter 파싱 + 패턴매칭)이 무거워서, Kafka
+# 하트비트/오토커밋과 같은 이벤트루프에서 동기로 돌리면 그 루프를 막아 세션 타임아웃으로
+# 그룹에서 튕겨나간다(UnknownMemberIdError). 큐로 "언제 처리할지"를, 프로세스풀로
+# "누가 CPU를 쓰는지"를 분리해서 컨슈머 루프가 analyze_session 실행 시간과 완전히
+# 무관하게 돈다.
+_FINALIZE_WORKERS = 3
+_finalize_queue: "asyncio.Queue[str]" = asyncio.Queue()
+_pool: Optional[ProcessPoolExecutor] = None
+_finalize_tasks: List[asyncio.Task] = []
 
 
 class _SessionBuffer:
@@ -56,11 +67,12 @@ def _get_buffer(db, sid: str) -> Optional[_SessionBuffer]:
     return buf
 
 
-def _finalize(db, sid: str) -> None:
+def _prepare_finalize(db, sid: str) -> Optional[Tuple[_SessionBuffer, List[EditOp], str]]:
+    """가벼운 부분만: 버퍼 pop, 멱등 체크, raw blob 저장. analyze_session은 여기서 안 부른다."""
     buf = _buffers.pop(sid, None)
     state = db.query(IngestSessionState).filter(IngestSessionState.sid == sid).first()
     if buf is None or state is None or state.ended:
-        return  # 멱등: 이미 처리됐거나 버퍼가 없으면(§8) 재처리하지 않음
+        return None  # 멱등: 이미 처리됐거나 버퍼가 없으면(§8) 재처리하지 않음
 
     # 최종 언어는 PATCH /sessions/{id}(세션 종료, 언어 변경 가능)가 권위 소스.
     # 아직 반영 전이면(REST 호출과 WS session.end 순서 미보장) session.start의 lang으로 대체.
@@ -68,11 +80,15 @@ def _finalize(db, sid: str) -> None:
     lang = (sub.language if sub is not None else None) or buf.lang or "unknown"
     events = sorted(buf.events, key=lambda e: e.t)
     write_raw_blob(buf.problem_id, sid, events)
+    return buf, events, lang
 
-    result = analyze_session(events=events, lang=lang, submission_ts_ms=buf.submission_ts)
+
+def _commit_finalize(db, sid: str, buf: _SessionBuffer, lang: str, result: AnalysisResult) -> None:
+    state = db.query(IngestSessionState).filter(IngestSessionState.sid == sid).first()
+    if state is None:
+        return
     if state.seq_gap_detected:
         result.analysis_level = "degraded"  # §8: seq 누락 세션은 기준선 삽입 제외 대상
-
     save_analysis(
         db, sid=sid, user_id=buf.user_id, problem_id=buf.problem_id, lang=lang, result=result
     )
@@ -103,9 +119,43 @@ def _handle_message(sid: str, msg_type: str, raw: dict) -> None:
                 buf.submission_ts.append(raw.get("t", 0))
 
         elif msg_type == "session.end":
-            _finalize(db, sid)
+            # 무거운 analyze_session은 여기서 절대 안 부른다 — sid만 큐에 넣고
+            # 바로 다음 Kafka 메시지로 넘어가서 하트비트/커밋 코루틴을 안 막는다.
+            _finalize_queue.put_nowait(sid)
     finally:
         db.close()
+
+
+async def _finalize_worker() -> None:
+    """큐에서 sid를 꺼내 무거운 analyze_session만 별도 프로세스에 위임해 실행.
+
+    DB 조회/커밋은 가벼워서 이 코루틴에서 직접 하고, CPU 무거운 analyze_session만
+    ProcessPoolExecutor로 보내 메인 이벤트루프(Kafka 하트비트 포함)를 절대 막지 않는다.
+    """
+    while True:
+        sid = await _finalize_queue.get()
+        try:
+            db = SessionLocal()
+            try:
+                prepared = _prepare_finalize(db, sid)
+            finally:
+                db.close()
+            if prepared is None:
+                continue
+            buf, events, lang = prepared
+
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(_pool, analyze_session, events, lang, buf.submission_ts)
+
+            db = SessionLocal()
+            try:
+                _commit_finalize(db, sid, buf, lang, result)
+            finally:
+                db.close()
+        except Exception:
+            logger.exception("finalize worker 처리 실패: sid=%s", sid)
+        finally:
+            _finalize_queue.task_done()
 
 
 async def _consume_loop() -> None:
@@ -136,13 +186,15 @@ async def _consume_loop() -> None:
 
 
 def start_consumer() -> None:
-    global _task
+    global _task, _pool, _finalize_tasks
     if _task is None:
+        _pool = ProcessPoolExecutor(max_workers=_FINALIZE_WORKERS)
+        _finalize_tasks = [asyncio.create_task(_finalize_worker()) for _ in range(_FINALIZE_WORKERS)]
         _task = asyncio.create_task(_consume_loop())
 
 
 async def stop_consumer() -> None:
-    global _task
+    global _task, _pool, _finalize_tasks
     if _task is not None:
         _task.cancel()
         try:
@@ -150,3 +202,22 @@ async def stop_consumer() -> None:
         except asyncio.CancelledError:
             pass
         _task = None
+
+    # 큐에 남은 finalize 작업이 있으면 처리될 시간을 잠깐 주고, 그래도 안 끝나면 포기하고 취소
+    try:
+        await asyncio.wait_for(_finalize_queue.join(), timeout=60)
+    except asyncio.TimeoutError:
+        logger.warning("finalize queue 드레인 타임아웃, 남은 작업 %d개 취소", _finalize_queue.qsize())
+
+    for t in _finalize_tasks:
+        t.cancel()
+    for t in _finalize_tasks:
+        try:
+            await t
+        except asyncio.CancelledError:
+            pass
+    _finalize_tasks = []
+
+    if _pool is not None:
+        _pool.shutdown(wait=True)
+        _pool = None
