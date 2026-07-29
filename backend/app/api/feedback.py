@@ -293,8 +293,18 @@ async def create_feedback(
     problem = db.query(Problem).filter(Problem.problem_id == sub.problem_id).first()
     summary = db.query(SessionSummary).filter(SessionSummary.sid == body.session_id).first()
     pauses = db.query(PauseEventRow).filter(PauseEventRow.sid == body.session_id).all()
-    pivots = db.query(PivotEventRow).filter(PivotEventRow.sid == body.session_id).all()
-    windows = db.query(PatternWindowRow).filter(PatternWindowRow.sid == body.session_id).all()
+    # llm-structural-classifier-addendum §7: llm_candidate/llm 행은 검수 전 후보라
+    # 피드백 프롬프트(=grounding 근거)에 넣지 않는다. 결정론적 rule 행만 사용.
+    pivots = (
+        db.query(PivotEventRow)
+        .filter(PivotEventRow.sid == body.session_id, PivotEventRow.source == "rule")
+        .all()
+    )
+    windows = (
+        db.query(PatternWindowRow)
+        .filter(PatternWindowRow.sid == body.session_id, PatternWindowRow.source == "rule")
+        .all()
+    )
     submissions_hist = (
         db.query(JudgeSubmission)
         .filter(JudgeSubmission.session_id == body.session_id)

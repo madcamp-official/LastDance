@@ -1,4 +1,4 @@
-from typing import List, Literal, Tuple
+from typing import List, Literal, Optional, Tuple
 
 from pydantic import BaseModel
 
@@ -49,6 +49,34 @@ class PatternWindowResult(BaseModel):
     pivot_count_in_window: int = 0
 
 
+# ---- UNMATCHED 구간의 구조 diff (llm-structural-classifier-addendum §3) ----
+# LLM 입력용이지만 생성은 전 구간 결정론적. 원본 코드/식별자 텍스트는 넣지 않는다.
+class DiffEvent(BaseModel):
+    t_ms: int
+    op: Literal["insert", "delete"]
+    node_type: str
+    parent_type: str = ""
+    depth: int = 0
+    subtree_hash: str = ""
+    size_nodes: int = 0
+    callee_is_self: bool = False    # 재귀 판정용: 이름 대신 불리언만 전달
+
+
+class SubtreeShape(BaseModel):
+    root_type: str = ""
+    child_types_multiset: List[str] = []
+    max_depth: int = 0
+    has_self_call: bool = False
+
+
+class UnmatchedSegment(BaseModel):
+    segment_id: str
+    t_start_ms: int
+    t_end_ms: int
+    diff_events: List[DiffEvent] = []
+    final_subtree_shape: Optional[SubtreeShape] = None
+
+
 # ---- 워커 최종 산출 (§4.2) ----
 class AnalysisResult(BaseModel):
     analysis_level: str                     # "full" | "timing_only" | "degraded"
@@ -69,6 +97,7 @@ class AnalysisResult(BaseModel):
     pivots: List[DeleteBurst] = []
     pattern_windows: List[PatternWindowResult] = []
     patterns_detected: List[str] = []
+    unmatched_segments: List[UnmatchedSegment] = []  # 규칙 매처가 못 덮은 구간 (addendum §2)
 
 
 # ---- GET /sessions/{session_id}/analysis (분석 결과 조회) ----

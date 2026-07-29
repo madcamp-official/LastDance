@@ -17,10 +17,11 @@ from app.api import analysis as analysis_api
 from app.api import ingest as ingest_api
 from app.api import feedback as feedback_api
 from app.api import submission as submission_api
-from app.database import Base, engine, SessionLocal
+from app.database import Base, engine, SessionLocal, sync_missing_columns
 from app.util.messaging import start_producer, stop_producer, close_redis
 from app.worker.consumer import start_consumer, stop_consumer
 Base.metadata.create_all(engine)
+sync_missing_columns()
 app = FastAPI(
     title="Codeback",
     version="1.0.0",

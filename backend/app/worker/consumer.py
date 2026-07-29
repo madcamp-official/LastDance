@@ -17,13 +17,15 @@ from typing import Dict, List, Optional, Tuple
 from aiokafka import AIOKafkaConsumer
 
 from app.database import SessionLocal
+from app.llm.classifier import CLASSIFIER_VERSION, classify_unmatched
+from app.llm.client import LLMUnavailable, VLLMClient
 from app.model.ingest import IngestSessionState
 from app.model.session import Submission
 from app.schema.analysis import AnalysisResult, EditOp
 from app.util.messaging import KAFKA_BOOTSTRAP_SERVERS, KAFKA_TOPIC
 from app.worker.pipeline import analyze_session
 from app.worker.rawstore import write_raw_blob
-from app.worker.store import save_analysis
+from app.worker.store import save_analysis, save_llm_candidates
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +154,32 @@ async def _finalize_worker() -> None:
                 _commit_finalize(db, sid, buf, lang, result)
             finally:
                 db.close()
+
+            # (addendum §2) UNMATCHED 세그먼트가 있으면 세션당 1회만 LLM 구조 분류기 호출.
+            # 결정론적 분석 결과는 위에서 이미 커밋됐으므로, 여기 실패는 세그먼트를
+            # UNMATCHED로 남길 뿐 파이프라인을 실패시키지 않는다.
+            if result.analysis_level == "full" and result.unmatched_segments:
+                try:
+                    candidates = await classify_unmatched(
+                        VLLMClient(), sid, result.unmatched_segments,
+                        result.patterns_detected, lang,
+                        problem_id=str(buf.problem_id),
+                        total_duration_ms=result.total_ms,
+                    )
+                    if candidates:
+                        db = SessionLocal()
+                        try:
+                            save_llm_candidates(
+                                db, sid=sid, user_id=buf.user_id, problem_id=buf.problem_id,
+                                segments=result.unmatched_segments, results=candidates,
+                                classifier_version=CLASSIFIER_VERSION,
+                            )
+                        finally:
+                            db.close()
+                except LLMUnavailable as exc:
+                    logger.warning("구조 분류기 LLM 연결 실패 (sid=%s): %s — UNMATCHED 유지", sid, exc)
+                except Exception:
+                    logger.exception("구조 분류기 처리 실패 (sid=%s) — UNMATCHED 유지", sid)
         except Exception:
             logger.exception("finalize worker 처리 실패: sid=%s", sid)
         finally:

@@ -32,7 +32,15 @@ class VLLMClient:
         self._base_url = base_url
         self._model = model
 
-    async def chat(self, *, system: str, user: str) -> LLMResult:
+    async def chat(
+        self,
+        *,
+        system: str,
+        user: str,
+        temperature: "float | None" = None,
+        seed: "int | None" = None,
+        json_mode: bool = False,
+    ) -> LLMResult:
         payload = {
             "model": self._model,
             "messages": [
@@ -41,6 +49,13 @@ class VLLMClient:
             ],
             "stream": False,
         }
+        # 구조 분류기(addendum §5)용: temperature=0 + seed 고정 + JSON 강제
+        if temperature is not None:
+            payload["temperature"] = temperature
+        if seed is not None:
+            payload["seed"] = seed
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
         timeout = httpx.Timeout(connect=_CONNECT_TIMEOUT_SEC, read=_READ_TIMEOUT_SEC,
                                  write=_CONNECT_TIMEOUT_SEC, pool=_CONNECT_TIMEOUT_SEC)
         try:
