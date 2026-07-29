@@ -12,6 +12,7 @@ from typing import Dict, List, Optional, Tuple
 from app.schema.analysis import (
     AnalysisResult,
     AstSnapshot,
+    AstTreeEvolution,
     DeleteBurst,
     DiffEvent,
     EditOp,
@@ -64,6 +65,20 @@ def _effective_total_ms(events: List[EditOp]) -> int:
     return total - idle
 
 
+def _final_only_evolution(engine: ReplayEngine, t_ms: int) -> Optional[AstTreeEvolution]:
+    """스냅샷 1개(세션 종료 시점)짜리 트리 이력.
+
+    디바운스 루프를 못 도는 경로(degraded: K<50)용. 빈 트리 대비 diff이므로
+    전부 insert로 기록돼 "세션 종료 시점 트리 = 그 세션이 만든 구조"가 된다.
+    파서가 없으면(미지원 언어/tree-sitter 미설치) 트리 자체가 없어 None.
+    """
+    if engine.tree is None:
+        return None
+    shape = ShapeSnapshot(engine.tree, engine.source_bytes())
+    snapshot = build_ast_snapshot(0, t_ms, shape, diff_snapshots(None, shape, t_ms))
+    return build_tree_evolution([snapshot], engine.tree, engine.source_bytes())
+
+
 def analyze_session(
     events: List[EditOp],
     lang: str,
@@ -75,8 +90,10 @@ def analyze_session(
     K = len(events)
 
     # ---- 극단값: 이벤트가 너무 적으면 분석 제외 (재생만 수행, M1 검증용) ----
+    # 단 AST 트리 이력은 파서가 있으면 여기서도 남긴다 — degraded 세션도 "세션 종료
+    # 시점 트리"는 존재하고, 트리 변화 조회(app/model/ast_tree.py)의 대상이다.
     if K < MIN_EVENTS:
-        engine = ReplayEngine(parser=None)
+        engine = ReplayEngine(parser=load_parser(lang))
         engine.replay_all(events)
         code = engine.buffer.text()
         return AnalysisResult(
@@ -86,11 +103,15 @@ def analyze_session(
             keystroke_count=K,
             code_bytes=len(code.encode("utf-8")),
             final_code=code,
+            ast_evolution=_final_only_evolution(engine, events[-1].t if events else 0),
         )
 
     norm_lang = normalize_lang(lang)
-    parser = load_parser(lang) if norm_lang in _FULL_LANGS else None
-    full = parser is not None
+    # 파서만 있으면 AST 트리 추적은 가능하다. 패턴 매칭/pivot 분류/라벨링은 규칙이
+    # cpp·python 전용이라 _FULL_LANGS일 때만 돈다 — 두 조건을 분리해서 잡는다.
+    parser = load_parser(lang)
+    has_tree = parser is not None
+    full = has_tree and norm_lang in _FULL_LANGS
     level = "full" if full else "timing_only"
 
     # ---- 1차 패스: 타임스탬프 통계 ----
@@ -120,18 +141,20 @@ def analyze_session(
     ast_snapshots: List[AstSnapshot] = []               # 트리 변화 이력 (세션 종료 후 DB 영속화)
 
     def run_matcher(t_ms: int, at_end: bool = False) -> None:
+        """디바운스 시점 1회분: (full일 때만) 패턴 매칭 + (파서가 있으면 항상) 구조 스냅샷."""
         nonlocal chars_since_match, final_matches, prev_shape
-        matches = match_patterns(engine.tree, engine.source_bytes(), norm_lang)
-        for m in matches:
-            first_complete_ms.setdefault(m.pattern, t_ms)
-        if at_end:
-            final_matches = matches
+        if full:
+            matches = match_patterns(engine.tree, engine.source_bytes(), norm_lang)
+            for m in matches:
+                first_complete_ms.setdefault(m.pattern, t_ms)
+            if at_end:
+                final_matches = matches
         # 구조 diff 추출 (addendum §2): 매처와 같은 디바운스 시점에만 스냅샷을 떠서
         # 세션당 diff 이벤트 수가 매처 실행 횟수 P와 같은 규모로 수렴한다.
         shape = ShapeSnapshot(engine.tree, engine.source_bytes())
         step_events = diff_snapshots(prev_shape, shape, t_ms)
         diff_timeline.extend(step_events)
-        # UNMATCHED 여부와 무관하게 전 구간 기록 — 세션 종료 후 트리 변화 재구성용
+        # UNMATCHED 여부·analysis_level과 무관하게 전 구간 기록 — 트리 변화 재구성용
         ast_snapshots.append(build_ast_snapshot(len(ast_snapshots), t_ms, shape, step_events))
         prev_shape = shape
         chars_since_match = 0
@@ -145,14 +168,18 @@ def analyze_session(
         engine.apply(ev, i)
         chars_since_match += len(ev.txt) if ev.op == 0 else ev.len
 
-        if not full:
+        if not has_tree:
             continue
-
-        src_bytes = engine.source_bytes()
 
         if i in label_points or chars_since_match >= DEBOUNCE_CHARS:
             # 디바운스 실행 시점: pause 감지 시점 + 변경 누적 초과 시점 (§4.1 Step 5)
             run_matcher(ev.t)
+
+        # 아래부터는 규칙이 cpp·python 전용 (라벨링/pivot 스냅샷)
+        if not full:
+            continue
+
+        src_bytes = engine.source_bytes()
 
         if i in label_points:
             focus_b, _ = byte_and_point(engine.buffer.text(), _edit_focus_char(ev))
@@ -175,7 +202,7 @@ def analyze_session(
             for b in burst_after[i]:
                 snapshots_after[b.start_index] = snap
 
-    if full:
+    if has_tree:
         run_matcher(events[-1].t, at_end=True)  # 세션 종료 시점 확정 매칭 (§4.1 Step 5)
 
     final_code = engine.buffer.text()
@@ -232,8 +259,11 @@ def analyze_session(
     )
 
     # ---- 세션 전체 AST 트리 변화 이력 (app/model/ast_tree.py) ----
+    # analysis_level과 무관 — 파서로 트리를 뜰 수 있으면 항상 남긴다.
     ast_evolution = (
-        build_tree_evolution(ast_snapshots, engine.tree, engine.source_bytes()) if full else None
+        build_tree_evolution(ast_snapshots, engine.tree, engine.source_bytes())
+        if has_tree
+        else None
     )
 
     # ---- Phase 세그멘테이션 (§4.1 Step 7) ----

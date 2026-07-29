@@ -129,7 +129,8 @@ def _write_ast_evolution(
     """트리 변화 이력 3테이블 기록 (멱등: sid 기준 전삭제 후 재삽입).
 
     커밋하지 않는다 — 호출부(save_analysis)의 트랜잭션에 합류한다.
-    timing_only/degraded 세션은 evolution이 None이라 기존 행만 지우고 끝난다.
+    analysis_level(full/timing_only/degraded)과 무관하게 파서가 있던 세션이면 기록된다.
+    파서 없는 언어라 evolution이 None이면 기존 행만 지우고 끝난다.
     """
     db.query(AstDiffEventRow).filter(AstDiffEventRow.sid == sid).delete()
     db.query(AstSnapshotRow).filter(AstSnapshotRow.sid == sid).delete()
