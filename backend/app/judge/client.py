@@ -26,6 +26,7 @@ class Judge0Result:
     compile_output: str
     time_sec: Optional[float]   # None이면 실행 자체가 안 됨(컴파일 에러 등)
     memory_kb: Optional[int]
+    exit_signal: Optional[int]  # 9(SIGKILL)이면 cgroup OOM kill 가능성 높음(MLE 보강 판단용)
 
 
 def _b64(text: str) -> str:
@@ -85,4 +86,5 @@ class Judge0Client:
             compile_output=_unb64(body.get("compile_output")),
             time_sec=float(time_raw) if time_raw is not None else None,
             memory_kb=int(memory_raw) if memory_raw is not None else None,
+            exit_signal=body.get("exit_signal"),
         )
