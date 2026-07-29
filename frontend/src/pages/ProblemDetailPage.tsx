@@ -58,6 +58,14 @@ export function ProblemDetailPage() {
         </Link>
       </div>
 
+      {(problem.time_limit || problem.memory_limit) && (
+        <p className="mb-6 text-sm text-gray-500">
+          {problem.time_limit && <span>시간 제한: {problem.time_limit}</span>}
+          {problem.time_limit && problem.memory_limit && ' · '}
+          {problem.memory_limit && <span>메모리 제한: {problem.memory_limit}</span>}
+        </p>
+      )}
+
       <section className="mb-6">
         <h2 className="mb-2 text-lg font-medium">문제</h2>
         <MathText text={problem.statement} />
