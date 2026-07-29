@@ -26,6 +26,7 @@ class SessionSummary(Base):
     pause_total_ms = Column(Integer, nullable=False, default=0)
     pause_count = Column(Integer, nullable=False, default=0)
     pivot_count = Column(Integer, nullable=False, default=0)
+    local_rewrite_count = Column(Integer, nullable=False, default=0)  # 연구 7: 국소 반복 수정(TYPO 클러스터) 횟수
     code_bytes = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime(timezone=True), nullable=False)
 

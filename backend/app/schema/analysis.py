@@ -62,6 +62,7 @@ class AnalysisResult(BaseModel):
     pause_total_ms: int = 0
     pause_count: int = 0
     pivot_count: int = 0
+    local_rewrite_count: int = 0
     code_bytes: int = 0
     final_code: str = ""                    # M1 바이트 일치 검증용
     pauses: List[PausePoint] = []
