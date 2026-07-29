@@ -1,13 +1,26 @@
 import hashlib
+import logging
 from typing import Iterator, List, Optional
 
-try:
-    from tree_sitter import Parser, Tree, Node
-    from tree_sitter_language_pack import get_parser
+logger = logging.getLogger(__name__)
 
+try:
+    from tree_sitter import Language, Parser, Tree, Node
+    import tree_sitter_python
+    import tree_sitter_cpp
+
+    # tree_sitter_language_pack lazily downloads compiled grammars from GitHub
+    # Releases on first use — fails hard (DownloadError) with no network egress,
+    # which the deployed backend doesn't have. Build Language objects directly
+    # from the precompiled grammar wheels instead: fully offline, no runtime fetch.
+    _LANGUAGES = {
+        "python": Language(tree_sitter_python.language()),
+        "cpp": Language(tree_sitter_cpp.language()),
+    }
     _TS_AVAILABLE = True
 except ImportError:  # tree-sitter 미설치 환경 → timing_only 분석만 수행
     _TS_AVAILABLE = False
+    _LANGUAGES = {}
     Parser = Tree = Node = None  # type: ignore
 
 
@@ -33,11 +46,12 @@ def load_parser(lang: str):
     if not _TS_AVAILABLE:
         return None
     name = normalize_lang(lang)
-    if name is None:
+    if name is None or name not in _LANGUAGES:
         return None
     try:
-        return get_parser(name)
+        return Parser(_LANGUAGES[name])
     except Exception:
+        logger.exception("tree-sitter parser init failed for lang=%s", name)
         return None
 
 
