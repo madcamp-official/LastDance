@@ -16,12 +16,22 @@ export function AppLayout() {
     <div className="min-h-svh bg-white text-gray-900 dark:bg-gray-950 dark:text-gray-100">
       <header className="flex h-14 items-center justify-between border-b border-gray-200 px-4 dark:border-gray-800">
         <Link to="/problems" className="font-semibold">
-          LastDance
+          Codeback
         </Link>
         {status === 'authenticated' && (
           <div className="flex items-center gap-3 text-sm">
-            <Link to="/me" className="text-gray-500 hover:text-gray-700 hover:underline dark:hover:text-gray-300">
-              {user?.nickname ?? '내 계정'}
+            <Link to="/me" title={user?.email} aria-label="마이페이지">
+              {user?.profile_img ? (
+                <img
+                  src={user.profile_img}
+                  alt=""
+                  className="h-8 w-8 rounded-full object-cover"
+                />
+              ) : (
+                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-100 text-sm font-semibold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
+                  {(user?.nickname ?? '?').slice(0, 1).toUpperCase()}
+                </div>
+              )}
             </Link>
             <button
               type="button"

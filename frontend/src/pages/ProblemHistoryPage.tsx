@@ -53,8 +53,11 @@ export function ProblemHistoryPage() {
           }),
         )
         if (cancelled) return
+        // 제출 하나 없는 세션(예: 시작만 해두고 손대지 않은 시도)은 풀이 기록에서 굳이 보여주지 않는다.
         setEntries(
-          withSubs.sort((a, b) => (a.session.started_at < b.session.started_at ? 1 : -1)),
+          withSubs
+            .filter((entry) => entry.submissions.length > 0)
+            .sort((a, b) => (a.session.started_at < b.session.started_at ? 1 : -1)),
         )
         setStatus('ready')
       } catch (err) {

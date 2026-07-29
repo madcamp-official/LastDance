@@ -21,7 +21,7 @@ export function MyPage() {
   useEffect(() => {
     let cancelled = false
     apiClient.sessions
-      .listMine({ page_size: 200 })
+      .listMine({ page_size: 100 })
       .then((res) => {
         if (!cancelled) {
           setSessions(res.items)
@@ -37,9 +37,11 @@ export function MyPage() {
   }, [])
 
   // 세션을 problem_id로 그룹핑 — 활동 요약과 풀이 기록 로그(문제당 1행)가 같은 그룹을 공유한다.
+  // 제출 하나 없는 세션(시작만 해둔 시도)은 풀이 기록에서 노출하지 않는다.
   const byProblem = useMemo(() => {
     const map = new Map<number, UserSessionListItem[]>()
     for (const s of sessions) {
+      if (s.latest_submitted_at === null) continue
       const list = map.get(s.problem_id) ?? []
       list.push(s)
       map.set(s.problem_id, list)
@@ -80,6 +82,11 @@ export function MyPage() {
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-8">
+      <div className="mb-2">
+        <Link to="/problems" className="text-sm text-indigo-600 hover:underline">
+          ← 문제 목록
+        </Link>
+      </div>
       <h1 className="mb-6 text-2xl font-semibold">마이페이지</h1>
 
       <section className="mb-8 flex flex-col gap-4 rounded-md border border-gray-200 p-4 dark:border-gray-800">
@@ -132,16 +139,16 @@ export function MyPage() {
                 >
                   {row.problem_title}
                 </Link>
-                <span className="text-xs text-gray-500">
-                  {row.lastSubmittedAt
-                    ? new Date(row.lastSubmittedAt).toLocaleString()
-                    : '제출 기록 없음'}
-                </span>
                 {row.solved && (
                   <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
                     Solved
                   </span>
                 )}
+                <span className="text-xs text-gray-500">
+                  {row.lastSubmittedAt
+                    ? new Date(row.lastSubmittedAt).toLocaleString()
+                    : '제출 기록 없음'}
+                </span>
               </li>
             ))}
           </ul>

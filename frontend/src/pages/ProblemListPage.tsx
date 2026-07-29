@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { apiClient } from '../lib/api'
 import { ApiError } from '../lib/api-client'
@@ -64,6 +64,16 @@ export function ProblemListPage() {
     }
   }, [])
 
+  // 과거에 중복 생성된 active 세션이 남아있을 수 있어 문제당 가장 최근 세션 하나만 보여준다.
+  const dedupedInProgress = useMemo(() => {
+    const byProblem = new Map<number, UserSessionListItem>()
+    for (const s of inProgress) {
+      const cur = byProblem.get(s.problem_id)
+      if (!cur || s.started_at > cur.started_at) byProblem.set(s.problem_id, s)
+    }
+    return [...byProblem.values()]
+  }, [inProgress])
+
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
   function toggleDifficulty(tier: DifficultyTier) {
@@ -80,6 +90,25 @@ export function ProblemListPage() {
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-8">
+      {dedupedInProgress.length > 0 && (
+        <section className="mb-8 border-b border-gray-200 pb-8 dark:border-gray-800">
+          <h1 className="mb-3 text-2xl font-semibold">풀이 중인 문제</h1>
+          <ul className="flex flex-col divide-y divide-gray-200 rounded-md border border-gray-200 dark:divide-gray-800 dark:border-gray-800">
+            {dedupedInProgress.map((s) => (
+              <li key={s.session_id} className="flex items-center gap-3 px-3 py-2.5">
+                <DifficultyBadge difficulty={s.difficulty} />
+                <Link
+                  to={`/problems/${s.problem_id}/solve`}
+                  className="font-medium text-indigo-600 hover:underline"
+                >
+                  {s.problem_title}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <h1 className="mb-6 text-2xl font-semibold">문제 목록</h1>
 
       <div className="mb-6 flex flex-wrap items-center gap-4 rounded-md border border-gray-200 p-3 text-sm dark:border-gray-800">
@@ -106,25 +135,6 @@ export function ProblemListPage() {
           ))}
         </div>
       </div>
-
-      {inProgress.length > 0 && (
-        <div className="mb-6">
-          <h2 className="mb-2 text-sm font-medium text-gray-500">풀이 중인 문제</h2>
-          <ul className="flex flex-col divide-y divide-gray-200 rounded-md border border-gray-200 dark:divide-gray-800 dark:border-gray-800">
-            {inProgress.map((s) => (
-              <li key={s.session_id} className="flex items-center gap-3 px-3 py-2.5">
-                <DifficultyBadge difficulty={s.difficulty} />
-                <Link
-                  to={`/problems/${s.problem_id}/solve`}
-                  className="font-medium text-indigo-600 hover:underline"
-                >
-                  {s.problem_title}
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
 
       {status === 'loading' && <p className="text-gray-500">불러오는 중...</p>}
       {status === 'error' && <p className="text-red-600">{errorMessage}</p>}

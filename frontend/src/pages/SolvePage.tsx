@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
 import type { OnMount } from '@monaco-editor/react'
 import { apiClient } from '../lib/api'
 import { ApiError } from '../lib/api-client'
@@ -138,6 +138,19 @@ export function SolvePage() {
     }
   }, [problemId, numericProblemId])
 
+  // 세션 상세 + (있으면) 마지막 제출을 불러와 반영한다. 새로고침 복원과 세션 시작(재사용 포함)
+  // 양쪽에서 공유 — 백엔드가 새 세션을 만들었는지 기존 active 세션을 재사용했는지는 호출부가
+  // 신경 쓸 필요 없이, 항상 실제 서버 상태를 그대로 반영한다.
+  async function restoreSession(sessionId: string): Promise<void> {
+    const restored = await apiClient.sessions.get(sessionId)
+    setSession(restored)
+    if (restored.language) setLanguage(restored.language)
+
+    const submissions = await apiClient.submissions.listBySession(sessionId)
+    const latest = submissions.items.at(-1)
+    setSubmission(latest ? await apiClient.submissions.get(latest.submission_id) : null)
+  }
+
   // 새로고침 시 이 문제에 대해 진행 중이던(또는 마지막) 세션이 있으면 이어서 복원한다.
   useEffect(() => {
     if (!problemId) return
@@ -147,21 +160,10 @@ export function SolvePage() {
     let cancelled = false
     ;(async () => {
       try {
-        const restored = await apiClient.sessions.get(storedSessionId)
+        await restoreSession(storedSessionId)
         if (cancelled) return
-        setSession(restored)
-        if (restored.language) setLanguage(restored.language)
-
         const savedCode = localStorage.getItem(codeStorageKey(problemId))
         if (savedCode !== null) setCode(savedCode)
-
-        const submissions = await apiClient.submissions.listBySession(restored.session_id)
-        if (cancelled) return
-        const latest = submissions.items.at(-1)
-        if (latest) {
-          const detail = await apiClient.submissions.get(latest.submission_id)
-          if (!cancelled) setSubmission(detail)
-        }
       } catch {
         // 저장된 세션을 더 이상 찾을 수 없으면(만료/삭제 등) 참조를 지우고 시작 화면으로 둔다.
         localStorage.removeItem(sessionStorageKey(problemId))
@@ -179,21 +181,12 @@ export function SolvePage() {
     setStarting(true)
     setStartError(null)
     try {
+      // 백엔드가 이 문제에 대해 이미 진행 중인 세션이 있으면 새로 만들지 않고 재사용해 돌려준다.
       const created = await apiClient.sessions.create({ problem_id: numericProblemId })
-      // POST /sessions 응답엔 status/started_at이 없다 — 방금 만든 세션이므로 로컬에서 채운다.
-      setSession({
-        session_id: created.session_id,
-        user_id: created.user_id,
-        problem_id: created.problem_id,
-        language: null,
-        started_at: new Date().toISOString(),
-        ended_at: null,
-        status: 'active',
-      })
       setCode('')
-      setSubmission(null)
-      localStorage.setItem(sessionStorageKey(problemId), created.session_id)
       localStorage.removeItem(codeStorageKey(problemId))
+      await restoreSession(created.session_id)
+      localStorage.setItem(sessionStorageKey(problemId), created.session_id)
     } catch (err) {
       setStartError(
         err instanceof ApiError ? err.message : '세션을 시작하지 못했습니다.',
@@ -265,13 +258,9 @@ export function SolvePage() {
     setEnding(true)
     try {
       await apiClient.sessions.patch(session.session_id, { status: 'abandoned', language })
-      setSession({ ...session, status: 'abandoned', ended_at: new Date().toISOString() })
       endKeystrokeLogging()
-      // AC 종료와 동일한 이유로 복원 포인터를 지운다.
-      if (problemId) {
-        localStorage.removeItem(sessionStorageKey(problemId))
-        localStorage.removeItem(codeStorageKey(problemId))
-      }
+      // 종료와 동시에 시작 화면으로 바로 돌아간다 — 별도로 "새 시도 시작"을 한 번 더 누를 필요 없음.
+      handleStartOver()
     } catch {
       // 종료 실패 — 버튼을 다시 눌러 재시도 가능하도록 세션 상태를 그대로 유지
     } finally {
@@ -282,6 +271,9 @@ export function SolvePage() {
   if (!session) {
     return (
       <div className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-8">
+        <Link to="/problems" className="text-sm text-indigo-600 hover:underline">
+          ← 문제 목록
+        </Link>
         <ProblemPanel problem={problem} />
 
         <div className="rounded-md border border-gray-200 p-4 dark:border-gray-800">
@@ -323,6 +315,9 @@ export function SolvePage() {
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-6 px-4 py-6">
+      <Link to="/problems" className="text-sm text-indigo-600 hover:underline">
+        ← 문제 목록
+      </Link>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <span className="text-sm text-gray-500">
           {problem && (
@@ -404,7 +399,7 @@ export function SolvePage() {
               disabled={ending || isEnded}
               className="rounded-md border border-gray-300 px-4 py-2 text-sm dark:border-gray-700 disabled:opacity-50"
             >
-              포기
+              {ending ? '종료하는 중...' : '이번 시도 종료'}
             </button>
             {submission && (
               <span className="text-sm text-gray-500">
