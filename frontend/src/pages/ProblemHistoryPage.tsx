@@ -12,6 +12,7 @@ const VERDICT_LABEL: Record<string, string> = {
   AC: '정답',
   WA: '오답',
   TLE: '시간 초과',
+  MLE: '메모리 초과',
   RE: '런타임 에러',
   CE: '컴파일 에러',
 }

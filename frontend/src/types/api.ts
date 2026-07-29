@@ -329,7 +329,7 @@ export type AnalysisPollResult = AnalyzeResponse | AnalysisProcessing
 // ── 제출 ────────────────────────────────────────────────
 
 export type SubmissionStatus = 'pending' | 'judged'
-export type SubmissionVerdict = 'AC' | 'WA' | 'TLE' | 'RE' | 'CE' | null
+export type SubmissionVerdict = 'AC' | 'WA' | 'TLE' | 'MLE' | 'RE' | 'CE' | null
 
 export interface CreateSubmissionRequest {
   session_id: string
