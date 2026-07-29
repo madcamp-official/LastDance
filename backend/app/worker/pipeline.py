@@ -23,7 +23,7 @@ from app.worker.buffer import byte_and_point, byte_to_char_map
 from app.worker.labeler import label_context
 from app.worker.patterns import match_patterns
 from app.worker.pause import detect_pauses
-from app.worker.pivot import StructSnapshot, classify_pivot, detect_bursts
+from app.worker.pivot import StructSnapshot, classify_pivot, count_local_rewrites, detect_bursts
 from app.worker.replay import ReplayEngine
 
 MIN_EVENTS = 50                     # K < 50 → 분석 제외 (§8: 문제 열람만 하고 이탈)
@@ -166,8 +166,10 @@ def analyze_session(
             b.pivot_type = classify_pivot(
                 snapshots_before[b.start_index], snapshots_after[b.start_index]
             )
-    # TYPO는 지표에서 제외 (§4.1 Step 4)
+    # TYPO는 지표에서 제외 (§4.1 Step 4) — 단, 국소 반복 수정 신호는 별도로 센다
+    typo_bursts = [b for b in bursts if b.pivot_type == "TYPO"]
     pivots = [b for b in bursts if b.pivot_type != "TYPO"]
+    local_rewrite_count = count_local_rewrites(typo_bursts, events) if full else 0
 
     # ---- 패턴 형성 구간 역산 (§4.1 Step 6) ----
     windows: List[PatternWindowResult] = []
@@ -238,6 +240,7 @@ def analyze_session(
         pause_total_ms=sum(p.duration_ms for p in pauses),
         pause_count=len(pauses),
         pivot_count=len(pivots),
+        local_rewrite_count=local_rewrite_count,
         code_bytes=len(final_code.encode("utf-8")),
         final_code=final_code,
         pauses=pauses,

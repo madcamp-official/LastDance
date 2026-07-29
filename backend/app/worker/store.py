@@ -47,6 +47,7 @@ def save_analysis(
             pause_total_ms=result.pause_total_ms,
             pause_count=result.pause_count,
             pivot_count=result.pivot_count,
+            local_rewrite_count=result.local_rewrite_count,
             code_bytes=result.code_bytes,
             created_at=datetime.now(tz=UTC),
         )

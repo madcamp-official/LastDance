@@ -24,7 +24,7 @@ from app.schema.feedback import (
     FeedbackRequest,
     FeedbackResponse,
 )
-from app.util.baseline import build_baseline
+from app.util.baseline import build_baseline, build_self_reference
 from app.util.security import get_current_user
 
 router = APIRouter(prefix="/feedback", tags=["feedback"])
@@ -131,6 +131,23 @@ _METRIC_KO = {
     "pivot_count": "재작성(pivot) 횟수",
 }
 
+_AST_LABEL_KO = {
+    "LOOP_BOUNDARY": "반복문 경계",
+    "BRANCH_CONDITION": "조건문 분기",
+    "INDEX_REASONING": "인덱스 추론",
+    "INTERFACE_DESIGN": "함수 시그니처 설계",
+    "ALGORITHM_ENTRY": "알고리즘 진입부",
+    "SETUP": "초기 설계",
+    "SYNTAX_STRUGGLE": "구문 오류",
+}
+
+# 연구 5 (규준참조 수치가 하위권 사용자 자기효능감에 해로울 수 있음): 사용자
+# 값이 코호트 중앙값보다 나쁜 편일 때는 코호트 percentile 대신 자기참조 추세를
+# 우선 노출한다.
+_SELF_REF_METRICS = ("total_duration", "pivot_count")
+_WORSE_THAN_P50_BANDS = {"p50~p75", "p75~p90", ">p90"}
+_SELF_REF_LOOKBACK = 5
+
 
 def _build_user_prompt(
     problem: Optional[Problem],
@@ -140,6 +157,8 @@ def _build_user_prompt(
     windows: List[PatternWindowRow],
     latest: Optional[JudgeSubmission],
     baseline: Optional[ProblemBaselineResponse] = None,
+    verdict_seq: Optional[List[str]] = None,
+    self_reference: Optional[dict] = None,
 ) -> str:
     lines: List[str] = []
     lines.append(f"[문제] {problem.title if problem else '알 수 없음'}")
@@ -191,7 +210,7 @@ def _build_user_prompt(
         lines.append(f"[구조 패턴 형성 순서] {'; '.join(window_parts)}")
 
     candidates: List[str] = []
-    dominant_label = _dominant([p.pattern for p in pauses])
+    dominant_label = _dominant([p.ast_label for p in pauses])
     if dominant_label and dominant_label in _ADVICE_BANK:
         candidates.extend(_ADVICE_BANK[dominant_label][:_ADVICE_CANDIDATES_PER_KEY])
     dominant_pivot = _dominant([p.pivot_type for p in pivots])
@@ -200,18 +219,46 @@ def _build_user_prompt(
     if candidates:
         lines.append("[조언 후보] " + " / ".join(candidates))
 
-    if latest:
+    if verdict_seq:
+        lines.append(f"[제출 이력] {' → '.join(verdict_seq)}")
+    elif latest:
         lines.append(f"[최종 제출] verdict={latest.verdict or '채점 전'}, language={latest.language}")
 
+    self_reference = self_reference or {}
     if baseline and baseline.metrics:
         lines.append(f"[비교군 기준선] tier={baseline.tier}, 같은 유형 문제를 푼 다른 응시자들과의 비교:")
         for m in baseline.metrics:
-            if m.metric not in _METRIC_KO:
-                continue  # pause_ms@LABEL 셀은 합성 전용 — 프롬프트에서 제외
+            if m.metric in _METRIC_KO:
+                label_ko = _METRIC_KO[m.metric]
+            elif m.metric.startswith("pause_ms@"):
+                ast_label = m.metric.split("@", 1)[1]
+                label_ko = f"{_AST_LABEL_KO.get(ast_label, ast_label)} 지점 정지 시간(ms)"
+                if ast_label != dominant_label:
+                    continue  # 이번 세션에서 실제로 지배적이었던 라벨만 노출
+            else:
+                continue
+
+            if (
+                m.metric in _SELF_REF_METRICS
+                and m.metric in self_reference
+                and m.user_band in _WORSE_THAN_P50_BANDS
+                and m.user_value is not None
+            ):
+                prev_avg, n_sessions = self_reference[m.metric]
+                if m.user_value < prev_avg * 0.95:
+                    direction = "감소"
+                elif m.user_value > prev_avg * 1.05:
+                    direction = "증가"
+                else:
+                    direction = "비슷"
+                lines.append(
+                    f"  - {label_ko}: 최근 {n_sessions}회 세션 평균({prev_avg:.0f}) 대비 "
+                    f"이번 세션({m.user_value:.0f})이 {direction}"
+                )
+                continue
+
             p = m.percentiles
-            line = (
-                f"  - {_METRIC_KO[m.metric]}: 비교군 p25={p.p25:.0f}, 중앙값={p.p50:.0f}, p75={p.p75:.0f}"
-            )
+            line = f"  - {label_ko}: 비교군 p25={p.p25:.0f}, 중앙값={p.p50:.0f}, p75={p.p75:.0f}"
             if m.user_value is not None:
                 line += f" / 이번 세션={m.user_value:.0f} (구간 {m.user_band})"
             if m.data_source == "estimated":
@@ -248,12 +295,14 @@ async def create_feedback(
     pauses = db.query(PauseEventRow).filter(PauseEventRow.sid == body.session_id).all()
     pivots = db.query(PivotEventRow).filter(PivotEventRow.sid == body.session_id).all()
     windows = db.query(PatternWindowRow).filter(PatternWindowRow.sid == body.session_id).all()
-    latest = (
+    submissions_hist = (
         db.query(JudgeSubmission)
         .filter(JudgeSubmission.session_id == body.session_id)
-        .order_by(JudgeSubmission.submitted_at.desc())
-        .first()
+        .order_by(JudgeSubmission.submitted_at.asc())
+        .all()
     )
+    latest = submissions_hist[-1] if submissions_hist else None
+    verdict_seq = [s.verdict or "PENDING" for s in submissions_hist]
 
     # 비교군 기준선: 세션 실측값을 metric 단위에 맞춰 전달
     # (total_duration 기준선은 초 단위 — session_summaries.total_ms를 초로 변환)
@@ -261,12 +310,26 @@ async def create_feedback(
     if summary:
         user_values["total_duration"] = summary.total_ms / 1000.0
         user_values["pivot_count"] = float(summary.pivot_count)
-    n_judged = db.query(JudgeSubmission).filter(JudgeSubmission.session_id == body.session_id).count()
+    n_judged = len(submissions_hist)
     if n_judged:
         user_values["attempt_count"] = float(n_judged)
+    dominant_pause_label = _dominant([p.ast_label for p in pauses])
+    if dominant_pause_label:
+        label_durations = [p.duration_ms for p in pauses if p.ast_label == dominant_pause_label]
+        if label_durations:
+            user_values[f"pause_ms@{dominant_pause_label}"] = float(max(label_durations))
     baseline = build_baseline(db, problem, user_values) if problem else None
 
-    user_prompt = _build_user_prompt(problem, summary, pauses, pivots, windows, latest, baseline)
+    self_reference = (
+        build_self_reference(db, current_user.user_id, summary.tier, body.session_id)
+        if summary
+        else {}
+    )
+
+    user_prompt = _build_user_prompt(
+        problem, summary, pauses, pivots, windows, latest, baseline,
+        verdict_seq=verdict_seq, self_reference=self_reference,
+    )
 
     try:
         text = model_used = None

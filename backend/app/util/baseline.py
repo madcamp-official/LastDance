@@ -6,10 +6,11 @@
 """
 
 import json
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
+from app.model.analysis import SessionSummary
 from app.model.baseline import BaselineCell, BaselineProblem
 from app.model.problem import Problem
 from app.schema.baseline import BaselineMetric, BaselinePercentiles, ProblemBaselineResponse
@@ -18,6 +19,10 @@ ESTIMATED_THRESHOLD = 30  # spec §4: n_real < 30 → "추정치 기반"
 
 # 피드백/리포트에 쓰는 핵심 metric 순서
 CORE_METRICS = ("total_duration", "attempt_count", "pivot_count")
+
+# 연구 5: 자기참조(self-referenced) 추세 — 같은 사용자의 최근 동일 tier 세션들과 비교.
+SELF_REF_LOOKBACK = 5
+SELF_REF_MIN_SESSIONS = 1
 
 
 def resolve_baseline_problem(db: Session, problem: Problem) -> Optional[BaselineProblem]:
@@ -104,3 +109,34 @@ def build_baseline(
         )
     resp.metrics = metrics
     return resp
+
+
+def build_self_reference(
+    db: Session,
+    user_id: str,
+    tier: Optional[str],
+    exclude_sid: str,
+) -> Dict[str, Tuple[float, int]]:
+    """같은 사용자의 최근(exclude_sid 제외) 동일 tier 세션들의
+    total_duration(초)/pivot_count 평균. {metric: (평균값, 세션 수)}.
+    비교 가능한 과거 세션이 없으면 빈 dict."""
+    if not tier:
+        return {}
+    rows = (
+        db.query(SessionSummary)
+        .filter(
+            SessionSummary.user_id == user_id,
+            SessionSummary.tier == tier,
+            SessionSummary.sid != exclude_sid,
+        )
+        .order_by(SessionSummary.created_at.desc())
+        .limit(SELF_REF_LOOKBACK)
+        .all()
+    )
+    if len(rows) < SELF_REF_MIN_SESSIONS:
+        return {}
+    n = len(rows)
+    return {
+        "total_duration": (sum(r.total_ms for r in rows) / n / 1000.0, n),
+        "pivot_count": (sum(r.pivot_count for r in rows) / n, n),
+    }
