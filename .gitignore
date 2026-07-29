@@ -1,0 +1,6 @@
+AtCoder_100/
+AtCoder_100_json/
+.env
+__pycache__/
+*.pyc
+app.db
