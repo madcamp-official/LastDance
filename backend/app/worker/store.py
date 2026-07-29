@@ -4,6 +4,7 @@ import json
 from datetime import UTC, datetime
 from typing import List, Optional
 
+from sqlalchemy import insert
 from sqlalchemy.orm import Session
 
 from app.model.analysis import (
@@ -13,7 +14,13 @@ from app.model.analysis import (
     SessionSummary,
     UnmatchedSegmentRow,
 )
-from app.schema.analysis import AnalysisResult, UnmatchedSegment
+from app.model.ast_tree import AstDiffEventRow, AstSnapshotRow, AstTreeEvolutionRow
+from app.schema.analysis import AnalysisResult, AstTreeEvolution, UnmatchedSegment
+
+# 트리 변화 이력 저장 상한 (세션당). 요약 행(AstTreeEvolutionRow)의 집계값은 상한 적용
+# 전 전체 기준으로 채우고, 상세 행만 잘라 truncated=True로 표시한다.
+MAX_AST_SNAPSHOT_ROWS = 1000
+MAX_AST_DIFF_ROWS = 3000
 
 
 def save_analysis(
@@ -102,7 +109,97 @@ def save_analysis(
                 created_at=datetime.now(tz=UTC),
             )
         )
+    # 세션 전체 AST 트리 변화 이력 (같은 트랜잭션 = 분석 결과와 항상 같은 세대)
+    _write_ast_evolution(
+        db, sid=sid, user_id=user_id, problem_id=problem_id, lang=lang,
+        matcher_version=result.matcher_version, evolution=result.ast_evolution,
+    )
     db.commit()
+
+
+def _write_ast_evolution(
+    db: Session,
+    sid: str,
+    user_id: str,
+    problem_id: int,
+    lang: Optional[str],
+    matcher_version: int,
+    evolution: Optional[AstTreeEvolution],
+) -> None:
+    """트리 변화 이력 3테이블 기록 (멱등: sid 기준 전삭제 후 재삽입).
+
+    커밋하지 않는다 — 호출부(save_analysis)의 트랜잭션에 합류한다.
+    timing_only/degraded 세션은 evolution이 None이라 기존 행만 지우고 끝난다.
+    """
+    db.query(AstDiffEventRow).filter(AstDiffEventRow.sid == sid).delete()
+    db.query(AstSnapshotRow).filter(AstSnapshotRow.sid == sid).delete()
+    db.query(AstTreeEvolutionRow).filter(AstTreeEvolutionRow.sid == sid).delete()
+    if evolution is None or not evolution.snapshots:
+        return
+
+    snapshots = evolution.snapshots[:MAX_AST_SNAPSHOT_ROWS]
+    diff_rows: List[dict] = []
+    for snap in snapshots:
+        if len(diff_rows) >= MAX_AST_DIFF_ROWS:
+            break
+        for e in snap.diff_events:
+            if len(diff_rows) >= MAX_AST_DIFF_ROWS:
+                break
+            diff_rows.append({
+                "sid": sid, "user_id": user_id,
+                "snapshot_seq": snap.seq, "t_ms": e.t_ms,
+                "op": e.op, "node_type": e.node_type, "parent_type": e.parent_type,
+                "depth": e.depth, "subtree_hash": e.subtree_hash,
+                "size_nodes": e.size_nodes, "callee_is_self": e.callee_is_self,
+                "from_parent": e.from_parent, "to_parent": e.to_parent,
+            })
+
+    db.add(
+        AstTreeEvolutionRow(
+            sid=sid, user_id=user_id, problem_id=problem_id, lang=lang,
+            matcher_version=matcher_version,
+            snapshot_count=len(evolution.snapshots),
+            diff_event_count=evolution.diff_event_count,
+            stored_diff_count=len(diff_rows),
+            truncated=(
+                len(snapshots) < len(evolution.snapshots)
+                or len(diff_rows) < evolution.diff_event_count
+            ),
+            insert_count=evolution.insert_count,
+            delete_count=evolution.delete_count,
+            move_count=evolution.move_count,
+            first_t_ms=evolution.first_t_ms,
+            last_t_ms=evolution.last_t_ms,
+            initial_node_count=evolution.initial_node_count,
+            final_node_count=evolution.final_node_count,
+            peak_node_count=evolution.peak_node_count,
+            final_max_depth=evolution.final_max_depth,
+            final_sketch_hash=evolution.final_sketch_hash,
+            final_shape_json=(
+                json.dumps(evolution.final_shape.model_dump(), ensure_ascii=False)
+                if evolution.final_shape is not None
+                else None
+            ),
+            created_at=datetime.now(tz=UTC),
+        )
+    )
+    db.add_all(
+        AstSnapshotRow(
+            sid=sid, user_id=user_id, problem_id=problem_id,
+            seq=s.seq, t_ms=s.t_ms,
+            struct_node_count=s.struct_node_count,
+            max_depth=s.max_depth,
+            sketch_hash=s.sketch_hash,
+            node_type_counts_json=json.dumps(s.node_type_counts, ensure_ascii=False),
+            insert_count=s.insert_count,
+            delete_count=s.delete_count,
+            move_count=s.move_count,
+        )
+        for s in snapshots
+    )
+    if diff_rows:
+        # 세션당 수천 행까지 갈 수 있어 ORM 단건 add 대신 executemany 한 방으로
+        db.execute(insert(AstDiffEventRow), diff_rows)
 
 
 def save_llm_candidates(

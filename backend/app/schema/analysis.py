@@ -1,4 +1,4 @@
-from typing import List, Literal, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel
 
@@ -82,6 +82,37 @@ class UnmatchedSegment(BaseModel):
     final_subtree_shape: Optional[SubtreeShape] = None
 
 
+# ---- 세션 전체 AST 트리 변화 이력 (app/model/ast_tree.py에 영속화) ----
+# UNMATCHED 여부와 무관하게 매처 실행(디바운스) 시점마다 전부 기록한다.
+class AstSnapshot(BaseModel):
+    seq: int                        # 세션 내 매처 실행 순서 (0부터)
+    t_ms: int
+    struct_node_count: int = 0
+    max_depth: int = 0
+    sketch_hash: str = ""           # 트리 전체 구조 해시 (되돌아간 구간 탐지용)
+    node_type_counts: Dict[str, int] = {}
+    insert_count: int = 0           # 직전 스냅샷 대비
+    delete_count: int = 0
+    move_count: int = 0
+    diff_events: List[DiffEvent] = []
+
+
+class AstTreeEvolution(BaseModel):
+    snapshots: List[AstSnapshot] = []
+    insert_count: int = 0
+    delete_count: int = 0
+    move_count: int = 0
+    diff_event_count: int = 0
+    first_t_ms: int = 0
+    last_t_ms: int = 0
+    initial_node_count: int = 0
+    final_node_count: int = 0
+    peak_node_count: int = 0
+    final_max_depth: int = 0
+    final_sketch_hash: str = ""
+    final_shape: Optional[SubtreeShape] = None
+
+
 # ---- 워커 최종 산출 (§4.2) ----
 class AnalysisResult(BaseModel):
     analysis_level: str                     # "full" | "timing_only" | "degraded"
@@ -103,9 +134,16 @@ class AnalysisResult(BaseModel):
     pattern_windows: List[PatternWindowResult] = []
     patterns_detected: List[str] = []
     unmatched_segments: List[UnmatchedSegment] = []  # 규칙 매처가 못 덮은 구간 (addendum §2)
+    ast_evolution: Optional[AstTreeEvolution] = None  # 세션 전체 트리 변화 (full 분석에서만)
 
 
 # ---- GET /sessions/{session_id}/analysis (분석 결과 조회) ----
 class AnalyzeResponse(BaseModel):
     session_id: str
     result: AnalysisResult
+
+
+# ---- GET /sessions/{session_id}/ast-evolution (트리 변화 이력 조회) ----
+class AstEvolutionResponse(BaseModel):
+    session_id: str
+    evolution: AstTreeEvolution

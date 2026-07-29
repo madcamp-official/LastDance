@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, status
+import json
+
+from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
@@ -10,15 +12,21 @@ from app.model.analysis import (
     PivotEventRow,
     SessionSummary,
 )
+from app.model.ast_tree import AstDiffEventRow, AstSnapshotRow, AstTreeEvolutionRow
 from app.model.ingest import IngestSessionState
 from app.model.session import Submission
 from app.model.user import User
 from app.schema.analysis import (
     AnalysisResult,
     AnalyzeResponse,
+    AstEvolutionResponse,
+    AstSnapshot,
+    AstTreeEvolution,
     DeleteBurst,
+    DiffEvent,
     PatternWindowResult,
     PausePoint,
+    SubtreeShape,
 )
 from app.util.security import get_current_user
 
@@ -108,3 +116,90 @@ async def get_analysis(
         patterns_detected=sorted({w.pattern for w in windows}),
     )
     return AnalyzeResponse(session_id=session_id, result=result)
+
+
+@router.get("/{session_id}/ast-evolution")
+async def get_ast_evolution(
+    session_id: str,
+    include_diffs: bool = Query(True, description="스냅샷별 diff 이벤트 포함 여부"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """세션 종료 후 저장된 AST 트리 변화 이력 (app/model/ast_tree.py).
+
+    스냅샷은 매처 실행(디바운스) 시점 기준이라 시간 간격이 균일하지 않다 —
+    t_ms를 x축으로 써야 한다. include_diffs=false면 곡선용 요약만 내려간다.
+    """
+    _load_owned_session(session_id, current_user.user_id, db)
+
+    row = (
+        db.query(AstTreeEvolutionRow)
+        .filter(AstTreeEvolutionRow.sid == session_id)
+        .first()
+    )
+    if row is None:
+        state = db.query(IngestSessionState).filter(IngestSessionState.sid == session_id).first()
+        if state is not None and not state.ended:
+            return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content={"status": "processing"})
+        # 분석은 끝났지만 timing_only/degraded라 트리 이력이 없는 경우도 여기로 온다
+        raise APIError(
+            status.HTTP_404_NOT_FOUND, "AST_EVOLUTION_NOT_FOUND", "트리 변화 이력이 없습니다."
+        )
+
+    snap_rows = (
+        db.query(AstSnapshotRow)
+        .filter(AstSnapshotRow.sid == session_id)
+        .order_by(AstSnapshotRow.seq)
+        .all()
+    )
+    diffs_by_seq: dict = {}
+    if include_diffs:
+        for d in (
+            db.query(AstDiffEventRow)
+            .filter(AstDiffEventRow.sid == session_id)
+            .order_by(AstDiffEventRow.snapshot_seq, AstDiffEventRow.id)
+            .all()
+        ):
+            diffs_by_seq.setdefault(d.snapshot_seq, []).append(
+                DiffEvent(
+                    t_ms=d.t_ms, op=d.op, node_type=d.node_type,
+                    parent_type=d.parent_type, depth=d.depth,
+                    subtree_hash=d.subtree_hash, size_nodes=d.size_nodes,
+                    callee_is_self=d.callee_is_self,
+                    from_parent=d.from_parent, to_parent=d.to_parent,
+                )
+            )
+
+    evolution = AstTreeEvolution(
+        snapshots=[
+            AstSnapshot(
+                seq=s.seq, t_ms=s.t_ms,
+                struct_node_count=s.struct_node_count,
+                max_depth=s.max_depth,
+                sketch_hash=s.sketch_hash,
+                node_type_counts=json.loads(s.node_type_counts_json or "{}"),
+                insert_count=s.insert_count,
+                delete_count=s.delete_count,
+                move_count=s.move_count,
+                diff_events=diffs_by_seq.get(s.seq, []),
+            )
+            for s in snap_rows
+        ],
+        insert_count=row.insert_count,
+        delete_count=row.delete_count,
+        move_count=row.move_count,
+        diff_event_count=row.diff_event_count,
+        first_t_ms=row.first_t_ms,
+        last_t_ms=row.last_t_ms,
+        initial_node_count=row.initial_node_count,
+        final_node_count=row.final_node_count,
+        peak_node_count=row.peak_node_count,
+        final_max_depth=row.final_max_depth,
+        final_sketch_hash=row.final_sketch_hash,
+        final_shape=(
+            SubtreeShape(**json.loads(row.final_shape_json))
+            if row.final_shape_json
+            else None
+        ),
+    )
+    return AstEvolutionResponse(session_id=session_id, evolution=evolution)

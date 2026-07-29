@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Tuple
 
 from app.schema.analysis import (
     AnalysisResult,
+    AstSnapshot,
     DeleteBurst,
     DiffEvent,
     EditOp,
@@ -26,7 +27,13 @@ from app.worker.patterns import match_patterns
 from app.worker.pause import detect_pauses
 from app.worker.pivot import StructSnapshot, classify_pivot, count_local_rewrites, detect_bursts
 from app.worker.replay import ReplayEngine
-from app.worker.structdiff import ShapeSnapshot, diff_snapshots, extract_unmatched_segments
+from app.worker.structdiff import (
+    ShapeSnapshot,
+    build_ast_snapshot,
+    build_tree_evolution,
+    diff_snapshots,
+    extract_unmatched_segments,
+)
 
 MIN_EVENTS = 50                     # K < 50 → 분석 제외 (§8: 문제 열람만 하고 이탈)
 DEBOUNCE_CHARS = 200                # 직전 매칭 이후 변경 누적 임계값 (§4.1 Step 5)
@@ -110,6 +117,7 @@ def analyze_session(
     chars_since_match = 0
     prev_shape: Optional[ShapeSnapshot] = None          # 직전 매처 실행 시점 구조 스냅샷
     diff_timeline: List[DiffEvent] = []                 # 매처 실행 시점 간 구조 diff 누적
+    ast_snapshots: List[AstSnapshot] = []               # 트리 변화 이력 (세션 종료 후 DB 영속화)
 
     def run_matcher(t_ms: int, at_end: bool = False) -> None:
         nonlocal chars_since_match, final_matches, prev_shape
@@ -121,7 +129,10 @@ def analyze_session(
         # 구조 diff 추출 (addendum §2): 매처와 같은 디바운스 시점에만 스냅샷을 떠서
         # 세션당 diff 이벤트 수가 매처 실행 횟수 P와 같은 규모로 수렴한다.
         shape = ShapeSnapshot(engine.tree, engine.source_bytes())
-        diff_timeline.extend(diff_snapshots(prev_shape, shape, t_ms))
+        step_events = diff_snapshots(prev_shape, shape, t_ms)
+        diff_timeline.extend(step_events)
+        # UNMATCHED 여부와 무관하게 전 구간 기록 — 세션 종료 후 트리 변화 재구성용
+        ast_snapshots.append(build_ast_snapshot(len(ast_snapshots), t_ms, shape, step_events))
         prev_shape = shape
         chars_since_match = 0
 
@@ -220,6 +231,11 @@ def analyze_session(
         else []
     )
 
+    # ---- 세션 전체 AST 트리 변화 이력 (app/model/ast_tree.py) ----
+    ast_evolution = (
+        build_tree_evolution(ast_snapshots, engine.tree, engine.source_bytes()) if full else None
+    )
+
     # ---- Phase 세그멘테이션 (§4.1 Step 7) ----
     t_end = events[-1].t
     setup_end = body_entry_ms if body_entry_ms is not None else t_end
@@ -264,4 +280,5 @@ def analyze_session(
         pattern_windows=windows,
         patterns_detected=sorted({m.pattern for m in final_matches}),
         unmatched_segments=unmatched,
+        ast_evolution=ast_evolution,
     )
