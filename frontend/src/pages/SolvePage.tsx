@@ -232,6 +232,8 @@ export function SolvePage() {
     if (!session || !problemId || Number.isNaN(numericProblemId)) return
     setSubmitting(true)
     setSubmitError(null)
+    // 이전 제출의 채점 결과(오답/런타임 에러 등)가 새로 채점되는 동안 그대로 남아 헷갈리지 않도록 먼저 지운다.
+    setSubmission(null)
     try {
       const created = await apiClient.submissions.create({
         session_id: session.session_id,
@@ -350,15 +352,6 @@ export function SolvePage() {
             />
             문제/풀이 나란히 보기
           </label>
-          {isEnded && (
-            <button
-              type="button"
-              onClick={handleStartOver}
-              className="rounded-md border border-gray-300 px-3 py-1.5 text-sm dark:border-gray-700"
-            >
-              새 시도 시작
-            </button>
-          )}
         </div>
       </div>
 
@@ -405,14 +398,24 @@ export function SolvePage() {
             >
               {submitting ? '채점 중...' : '제출'}
             </button>
-            <button
-              type="button"
-              onClick={handleAbandon}
-              disabled={ending || isEnded}
-              className="rounded-md border border-gray-300 px-4 py-2 text-sm dark:border-gray-700 disabled:opacity-50"
-            >
-              {ending ? '종료하는 중...' : '이번 시도 종료'}
-            </button>
+            {isEnded ? (
+              <button
+                type="button"
+                onClick={handleStartOver}
+                className="rounded-md border border-gray-300 px-4 py-2 text-sm dark:border-gray-700"
+              >
+                새 시도 시작
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleAbandon}
+                disabled={ending}
+                className="rounded-md border border-gray-300 px-4 py-2 text-sm dark:border-gray-700 disabled:opacity-50"
+              >
+                {ending ? '종료하는 중...' : '이번 시도 종료'}
+              </button>
+            )}
             {submission && (
               <span className="text-sm text-gray-500">
                 {submission.verdict ? (
