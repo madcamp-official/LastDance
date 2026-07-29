@@ -78,6 +78,8 @@ async def create_submission(
             code=body.code,
             language=body.language,
             problem_source=problem.testcase_dir,
+            time_limit=problem.time_limit,
+            memory_limit=problem.memory_limit,
             client=judge_client,
         )
     except UnsupportedLanguage:

@@ -213,7 +213,7 @@ ID 표기: `problem_id`는 `db-schema.md`의 `problems.id`(BIGSERIAL) 그대로 
 |---|---|---|---|
 | submission_id | string | `"sub_001"` | |
 | status | string (enum) | `"judged"` | `POST` 호출 시점에 동기로 채점을 끝내고 저장하므로 항상 `"judged"`로 응답 |
-| verdict | string \| null | `"AC"` | `"AC"`\|`"WA"`\|`"TLE"`\|`"RE"`\|`"CE"` |
+| verdict | string \| null | `"AC"` | `"AC"`\|`"WA"`\|`"TLE"`\|`"RE"`\|`"CE"`\|`"MLE"` |
 | runtime_ms | integer \| null | `120` | 테스트케이스 전체 실행 시간 합. AC일 때만 값이 있고, 그 외에는 `null` |
 | memory_kb | integer \| null | `9600` | 테스트케이스 중 최대 메모리 사용량. AC일 때만 값이 있고, 그 외에는 `null` |
 | submitted_at | string (ISO8601) | `"2026-07-24T05:09:00Z"` | |
