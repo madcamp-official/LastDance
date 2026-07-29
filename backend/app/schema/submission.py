@@ -3,7 +3,7 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel
 
 SubmissionStatus = Literal["pending", "judged"]
-SubmissionVerdict = Literal["AC", "WA", "TLE", "RE", "CE"]
+SubmissionVerdict = Literal["AC", "WA", "TLE", "RE", "CE", "MLE"]
 
 
 # ---- POST /submissions ----
