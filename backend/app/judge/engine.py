@@ -61,10 +61,17 @@ def _verdict_for(result: Judge0Result, expected_output: str, memory_limit_kb: in
     Judge0(isolate)에는 별도의 MLE status_id가 없다 — 메모리 초과로 강제 종료되면
     보통 Runtime Error 계열(SIGKILL 등)로 잡힌다. 그래서 status와 무관하게 실측
     memory가 설정한 memory_limit_kb 이상이면 우선적으로 MLE로 판정한다.
+
+    cgroup OOM kill 시점에 따라 memory_kb가 피크보다 낮게 찍히거나 None으로 올 수
+    있어 위 실측 비교만으로 놓칠 수 있다. exit_signal 9(SIGKILL)는 TLE(별도
+    status_id 5로 처리됨)를 제외하면 사실상 우리가 설정한 memory_limit_kb에 의한
+    cgroup kill일 확률이 높아 2차 판단 근거로 쓴다.
     """
     if result.status_id == 6:
         return "CE"
     if result.memory_kb is not None and result.memory_kb >= memory_limit_kb:
+        return "MLE"
+    if result.status_id != 5 and result.exit_signal == 9:
         return "MLE"
     if result.status_id == 5:
         return "TLE"
