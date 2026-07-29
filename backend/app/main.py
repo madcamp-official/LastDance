@@ -5,6 +5,7 @@ from app.model import user
 from app.model import problem
 from app.model import session as session_model
 from app.model import analysis as analysis_model
+from app.model import ast_tree as ast_tree_model
 from app.model import ingest as ingest_model
 from app.model import feedback as feedback_model
 from app.model import submission as submission_model

@@ -16,7 +16,14 @@ parent_type/depth는 addendum §3 예시와 같은 눈금을 쓴다: compound_st
 from collections import Counter
 from typing import List, NamedTuple, Optional, Tuple
 
-from app.schema.analysis import DiffEvent, PatternWindowResult, SubtreeShape, UnmatchedSegment
+from app.schema.analysis import (
+    AstSnapshot,
+    AstTreeEvolution,
+    DiffEvent,
+    PatternWindowResult,
+    SubtreeShape,
+    UnmatchedSegment,
+)
 from app.worker.astsupport import node_text, structure_sketch, walk_nodes
 
 # diff 대상으로 삼는 구조 노드 타입 (cpp / python)
@@ -33,6 +40,7 @@ _ASSIGN_TYPES = {"assignment_expression", "assignment", "augmented_assignment"}
 _SUBSCRIPT_TYPES = {"subscript_expression", "subscript"}
 
 _HASH_LEN = 6            # addendum §3 예시와 동일한 축약 해시 길이
+_TREE_HASH_LEN = 12      # 트리 전체 해시는 세션 내 스냅샷 동일성 판정용 — 충돌 여유를 더 둔다
 SEGMENT_GAP_MS = 30_000  # 이보다 diff 이벤트 간격이 벌어지면 세그먼트 분리
 MIN_SEGMENT_EVENTS = 3   # 이보다 diff 이벤트가 적은 세그먼트는 노이즈로 버림
 MAX_SEGMENTS = 8         # 세션당 LLM에 넘길 세그먼트 상한 (비용 통제, §7.4 사상)
@@ -101,13 +109,15 @@ def _has_visited_array_pattern(root) -> bool:
 
 
 class ShapeSnapshot:
-    """매처 실행 시점의 구조 노드 multiset. diff 계산에만 쓰인다."""
+    """매처 실행 시점의 구조 노드 multiset. diff 계산 + 트리 변화 이력 기록에 쓰인다."""
 
     def __init__(self, tree, source: bytes) -> None:
         self.entries: List[ShapeEntry] = []
+        self.sketch_hash: str = ""     # 트리 전체 구조 해시 (스냅샷 간 동일성 판정)
         if tree is None:
             return
         root = tree.root_node
+        self.sketch_hash = structure_sketch(root)[:_TREE_HASH_LEN]
         func_names = _function_names(root, source)
         for n in walk_nodes(root):
             if n.type not in _STRUCT_TYPES:
@@ -224,6 +234,54 @@ def final_subtree_shape(tree, source: bytes) -> Optional[SubtreeShape]:
         max_depth=max_depth,
         has_self_call=has_self_call,
         has_visited_array_pattern=_has_visited_array_pattern(shape_root),
+    )
+
+
+def build_ast_snapshot(
+    seq: int, t_ms: int, shape: ShapeSnapshot, events: List[DiffEvent]
+) -> AstSnapshot:
+    """매처 실행 시점 1회분의 트리 상태 + 직전 대비 변화량 (app/model/ast_tree.py에 영속화).
+
+    diff 계산 결과를 그대로 재사용하므로 추가 순회 비용이 없다(트리 전체 해시 1회 제외).
+    node_type_counts는 키 정렬해서 담아 직렬화 결과까지 결정론적으로 만든다.
+    """
+    counts = Counter(e.node_type for e in shape.entries)
+    ops = Counter(e.op for e in events)
+    return AstSnapshot(
+        seq=seq,
+        t_ms=t_ms,
+        struct_node_count=len(shape.entries),
+        max_depth=max((e.depth for e in shape.entries), default=0),
+        sketch_hash=shape.sketch_hash,
+        node_type_counts=dict(sorted(counts.items())),
+        insert_count=ops.get("insert", 0),
+        delete_count=ops.get("delete", 0),
+        move_count=ops.get("move", 0),
+        diff_events=events,
+    )
+
+
+def build_tree_evolution(
+    snapshots: List[AstSnapshot], tree, source: bytes
+) -> AstTreeEvolution:
+    """세션 종료 시점에 스냅샷 열을 세션 단위 트리 변화 요약으로 접는다."""
+    if not snapshots:
+        return AstTreeEvolution(final_shape=final_subtree_shape(tree, source))
+    node_counts = [s.struct_node_count for s in snapshots]
+    return AstTreeEvolution(
+        snapshots=snapshots,
+        insert_count=sum(s.insert_count for s in snapshots),
+        delete_count=sum(s.delete_count for s in snapshots),
+        move_count=sum(s.move_count for s in snapshots),
+        diff_event_count=sum(len(s.diff_events) for s in snapshots),
+        first_t_ms=snapshots[0].t_ms,
+        last_t_ms=snapshots[-1].t_ms,
+        initial_node_count=node_counts[0],
+        final_node_count=node_counts[-1],
+        peak_node_count=max(node_counts),
+        final_max_depth=snapshots[-1].max_depth,
+        final_sketch_hash=snapshots[-1].sketch_hash,
+        final_shape=final_subtree_shape(tree, source),
     )
 
 
