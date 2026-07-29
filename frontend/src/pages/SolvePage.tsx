@@ -34,11 +34,14 @@ const VERDICT_LABEL: Record<string, string> = {
 }
 
 // GET /problems/{id}와 POST /sessions 응답이 공통으로 갖는 지문 필드만 뽑은 뷰 타입.
+// time_limit/memory_limit은 GET /problems/{id}에만 있고 배포된 백엔드는 아직 내려주지 않아 optional.
 interface ProblemView {
   title: string
   statement: string
   constraints: string | null
   examples: ProblemExample[]
+  time_limit?: string | null
+  memory_limit?: string | null
 }
 
 function ProblemPanel({ problem }: { problem: ProblemView | null }) {
@@ -53,6 +56,14 @@ function ProblemPanel({ problem }: { problem: ProblemView | null }) {
   return (
     <div className="flex flex-col gap-4 overflow-y-auto rounded-md border border-gray-200 p-4 dark:border-gray-800">
       <h1 className="text-lg font-semibold">{problem.title}</h1>
+
+      {(problem.time_limit || problem.memory_limit) && (
+        <p className="text-xs text-gray-500">
+          {problem.time_limit && <span>시간 제한: {problem.time_limit}</span>}
+          {problem.time_limit && problem.memory_limit && ' · '}
+          {problem.memory_limit && <span>메모리 제한: {problem.memory_limit}</span>}
+        </p>
+      )}
 
       <section>
         <h2 className="mb-2 text-sm font-medium text-gray-500">문제</h2>

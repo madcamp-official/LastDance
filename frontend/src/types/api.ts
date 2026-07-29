@@ -74,6 +74,9 @@ export interface ProblemDetail {
   examples: ProblemExample[]
   source: string
   difficulty: DifficultyTier | null
+  // docs/api-spec.md: GET /problems/{id}에만 추가된 필드 — 배포된 백엔드는 아직 내려주지 않음(optional로 방어).
+  time_limit?: string | null
+  memory_limit?: string | null
 }
 
 // ── 세션 ────────────────────────────────────────────────
