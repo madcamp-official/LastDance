@@ -33,6 +33,8 @@ class ProblemDetailResponse(BaseModel):
     examples: List[Example] = []
     source: Optional[str] = None
     difficulty: Optional[str] = None
+    time_limit: Optional[str] = None
+    memory_limit: Optional[str] = None
 
 
 # GET /problems/{problem_id}/stats 응답은 app/schema/baseline.py의 ProblemBaselineResponse 사용.
