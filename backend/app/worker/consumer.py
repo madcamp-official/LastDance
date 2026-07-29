@@ -205,7 +205,7 @@ async def stop_consumer() -> None:
 
     # 큐에 남은 finalize 작업이 있으면 처리될 시간을 잠깐 주고, 그래도 안 끝나면 포기하고 취소
     try:
-        await asyncio.wait_for(_finalize_queue.join(), timeout=30)
+        await asyncio.wait_for(_finalize_queue.join(), timeout=60)
     except asyncio.TimeoutError:
         logger.warning("finalize queue 드레인 타임아웃, 남은 작업 %d개 취소", _finalize_queue.qsize())
 
