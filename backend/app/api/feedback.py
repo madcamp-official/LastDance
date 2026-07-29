@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import UTC, datetime
 from typing import List, Optional
@@ -8,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.api.auth import APIError
 from app.database import get_db
 from app.llm.client import LLM_MODEL, LLMUnavailable, VLLMClient
+from app.llm.grounding import build_template_feedback, verify_grounding
 from app.model.analysis import PatternWindowRow, PauseEventRow, PivotEventRow, SessionSummary
 from app.model.feedback import Feedback
 from app.model.problem import Problem
@@ -25,8 +27,10 @@ from app.util.baseline import build_baseline
 from app.util.security import get_current_user
 
 router = APIRouter(prefix="/feedback", tags=["feedback"])
+logger = logging.getLogger("app.api.feedback")
 
 _FALLBACK_TEXT = "피드백 생성 서버에 연결할 수 없어 잠시 후 다시 시도해 주세요."
+_MAX_GROUNDING_RETRIES = 2  # dev-plan §7.3 — 최초 1회 + 재시도 2회
 
 _SYSTEM_PROMPT = (
     "당신은 코딩 테스트 연습 플랫폼의 튜터입니다. 응시자가 문제를 푸는 동안의 "
@@ -178,8 +182,22 @@ async def create_feedback(
     user_prompt = _build_user_prompt(problem, summary, pauses, pivots, windows, latest, baseline)
 
     try:
-        result = await llm_client.chat(system=_SYSTEM_PROMPT, user=user_prompt)
-        text, model_used = result.text, result.model
+        text = model_used = None
+        last_model = LLM_MODEL
+        for attempt in range(_MAX_GROUNDING_RETRIES + 1):
+            result = await llm_client.chat(system=_SYSTEM_PROMPT, user=user_prompt)
+            last_model = result.model
+            grounded, ungrounded_numbers = verify_grounding(result.text, user_prompt)
+            if grounded:
+                text, model_used = result.text, result.model
+                break
+            logger.warning(
+                "grounding 검증 실패 (session=%s, attempt=%d/%d): 근거 없는 숫자=%s",
+                body.session_id, attempt + 1, _MAX_GROUNDING_RETRIES + 1, ungrounded_numbers,
+            )
+        else:
+            text = build_template_feedback(problem, summary, pauses, pivots, windows, latest, baseline)
+            model_used = last_model
     except LLMUnavailable:
         text, model_used = _FALLBACK_TEXT, LLM_MODEL
 
