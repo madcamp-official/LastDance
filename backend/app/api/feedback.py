@@ -32,6 +32,10 @@ logger = logging.getLogger("app.api.feedback")
 _FALLBACK_TEXT = "피드백 생성 서버에 연결할 수 없어 잠시 후 다시 시도해 주세요."
 _MAX_GROUNDING_RETRIES = 2  # dev-plan §7.3 — 최초 1회 + 재시도 2회
 
+# app.worker.pivot.PIVOT_APPROACH_SWITCH — 여기선 문자열 상수만 복제(워커 의존 회피)
+_PIVOT_APPROACH_SWITCH = "APPROACH_SWITCH"
+_APPROACH_SWITCH_CHURN_THRESHOLD = 2  # 연구 4: 정지 크기보다 회복 패턴(재시도 횟수)이 신호
+
 _SYSTEM_PROMPT = (
     "당신은 코딩 테스트 연습 플랫폼의 튜터입니다. 응시자가 문제를 푸는 동안의 "
     "행동 데이터(정지, 재작성, 구조 패턴 형성 순서 등)를 보고 피드백을 작성합니다. "
@@ -110,8 +114,23 @@ def _build_user_prompt(
         lines.append(f"[주요 재작성] {pivot_desc}")
 
     if windows:
-        window_desc = "; ".join(f"{w.pattern}({w.formation_ms}ms 형성)" for w in windows)
-        lines.append(f"[구조 패턴 형성 순서] {window_desc}")
+        window_parts = []
+        for w in windows:
+            switches = sum(
+                1 for p in pivots if p.pattern == w.pattern and p.pivot_type == _PIVOT_APPROACH_SWITCH
+            )
+            if switches == 0:
+                tag = "원활한 형성"
+            elif switches >= _APPROACH_SWITCH_CHURN_THRESHOLD:
+                tag = f"접근법을 {switches}회 갈아엎음"
+            else:
+                tag = None
+            desc = f"{w.pattern}({w.formation_ms}ms 형성"
+            if tag:
+                desc += f", {tag}"
+            desc += ")"
+            window_parts.append(desc)
+        lines.append(f"[구조 패턴 형성 순서] {'; '.join(window_parts)}")
 
     if latest:
         lines.append(f"[최종 제출] verdict={latest.verdict or '채점 전'}, language={latest.language}")
