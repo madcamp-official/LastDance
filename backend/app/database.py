@@ -41,3 +41,27 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def sync_missing_columns() -> None:
+    """create_all()은 새 테이블만 만들고 기존 테이블에 추가된 컬럼은 반영 안 함.
+    ORM 모델 기준으로 실제 DB에 없는 컬럼을 ALTER TABLE로 채워준다 (alembic 없는 임시 대응)."""
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+
+    with engine.begin() as conn:
+        for table in Base.metadata.sorted_tables:
+            if table.name not in existing_tables:
+                continue
+            existing_columns = {col["name"] for col in inspector.get_columns(table.name)}
+            for column in table.columns:
+                if column.name in existing_columns:
+                    continue
+                col_type = column.type.compile(engine.dialect)
+                nullable = "" if column.nullable else " NOT NULL"
+                default = ""
+                if not column.nullable and column.default is not None and column.default.is_scalar:
+                    default = f" DEFAULT {column.default.arg!r}"
+                conn.execute(text(
+                    f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {col_type}{default}{nullable}'
+                ))

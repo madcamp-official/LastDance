@@ -1,7 +1,7 @@
 """분석 결과 저장 (dev-plan §8 멱등성: sid 기준 upsert)."""
 
 from datetime import UTC, datetime
-from typing import Optional
+from typing import List, Optional
 
 from sqlalchemy.orm import Session
 
@@ -11,7 +11,7 @@ from app.model.analysis import (
     PivotEventRow,
     SessionSummary,
 )
-from app.schema.analysis import AnalysisResult
+from app.schema.analysis import AnalysisResult, UnmatchedSegment
 
 
 def save_analysis(
@@ -79,4 +79,57 @@ def save_analysis(
                 pivot_count_in_window=w.pivot_count_in_window,
             )
         )
+    db.commit()
+
+
+def save_llm_candidates(
+    db: Session,
+    sid: str,
+    user_id: str,
+    problem_id: int,
+    segments: List[UnmatchedSegment],
+    results: list,          # List[app.llm.classifier.SegmentResult] (worker→llm 임포트 회피)
+    classifier_version: str,
+) -> None:
+    """구조 분류기(addendum §7)의 후보 결과 저장.
+
+    pattern_windows.source="llm_candidate", pivot_events.source="llm" —
+    기준선 통계·피드백 프롬프트는 source="rule"만 읽으므로 재현성 보장(§5)이 유지된다.
+    같은 sid 재처리 시 기존 후보 행을 지우고 다시 쓴다(멱등).
+    """
+    db.query(PatternWindowRow).filter(
+        PatternWindowRow.sid == sid, PatternWindowRow.source == "llm_candidate"
+    ).delete()
+    db.query(PivotEventRow).filter(
+        PivotEventRow.sid == sid, PivotEventRow.source == "llm"
+    ).delete()
+
+    seg_by_id = {s.segment_id: s for s in segments}
+    for r in results:
+        seg = seg_by_id.get(r.segment_id)
+        if seg is None:
+            continue
+        db.add(
+            PatternWindowRow(
+                sid=sid, user_id=user_id, problem_id=problem_id,
+                pattern=r.pattern,
+                t_start_ms=seg.t_start_ms, t_complete_ms=seg.t_end_ms,
+                formation_ms=max(seg.t_end_ms - seg.t_start_ms, 0),
+                source="llm_candidate",
+                classifier_version=classifier_version,
+                confidence=r.pattern_confidence,
+                proposed_label=r.proposed_label,
+            )
+        )
+        if r.pivot_type:
+            db.add(
+                PivotEventRow(
+                    sid=sid, user_id=user_id,
+                    t_ms=seg.t_start_ms, deleted_chars=0,
+                    pivot_type=r.pivot_type, pattern=r.pattern if r.pattern != "OTHER" else "",
+                    source="llm",
+                    classifier_version=classifier_version,
+                    confidence=r.pivot_confidence,
+                )
+            )
     db.commit()

@@ -53,8 +53,17 @@ async def get_analysis(
         raise APIError(status.HTTP_404_NOT_FOUND, "ANALYSIS_NOT_FOUND", "분석 결과가 없습니다.")
 
     pauses = db.query(PauseEventRow).filter(PauseEventRow.sid == session_id).all()
-    pivots = db.query(PivotEventRow).filter(PivotEventRow.sid == session_id).all()
-    windows = db.query(PatternWindowRow).filter(PatternWindowRow.sid == session_id).all()
+    # llm_candidate/llm 행은 검수 전 후보(addendum §7) — 세션 분석 응답에는 rule 행만.
+    pivots = (
+        db.query(PivotEventRow)
+        .filter(PivotEventRow.sid == session_id, PivotEventRow.source == "rule")
+        .all()
+    )
+    windows = (
+        db.query(PatternWindowRow)
+        .filter(PatternWindowRow.sid == session_id, PatternWindowRow.source == "rule")
+        .all()
+    )
 
     result = AnalysisResult(
         analysis_level=summary.analysis_level,

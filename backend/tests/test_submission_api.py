@@ -68,16 +68,23 @@ class FakeJudge0Client:
 
     def run(self, *, source_code, language_id, stdin, cpu_time_limit, memory_limit_kb, compiler_options=None):
         if source_code == "__CE__":
-            return Judge0Result(6, "Compilation Error", "", "", "boom", None, None)
+            return Judge0Result(6, "Compilation Error", "", "", "boom", None, None, None)
         if source_code == "__TLE__":
-            return Judge0Result(5, "Time Limit Exceeded", "", "", "", None, None)
+            return Judge0Result(5, "Time Limit Exceeded", "", "", "", None, None, None)
         if source_code == "__RE__":
-            return Judge0Result(11, "Runtime Error (NZEC)", "", "traceback", "", 0.01, 1000)
+            return Judge0Result(11, "Runtime Error (NZEC)", "", "traceback", "", 0.01, 1000, None)
+        if source_code == "__MLE__":
+            # judge0에는 별도 MLE status가 없어 SIGKILL 계열이 RE(Other)로 옴 — memory_kb가
+            # 기본 메모리 제한(1024MB=1,048,576KB)을 넘겨서 엔진이 MLE로 재분류해야 한다.
+            return Judge0Result(12, "Runtime Error (Other)", "", "", "", 0.05, 2_000_000, None)
+        if source_code == "__MLE_SIGKILL__":
+            # memory_kb가 None/피크보다 낮게 찍혀도 exit_signal=9(SIGKILL)로 MLE 판정돼야 한다.
+            return Judge0Result(12, "Runtime Error (Other)", "", "", "", 0.05, None, 9)
         if source_code == "__WRONG__":
-            return Judge0Result(3, "Accepted", "999\n", "", "", 0.02, 2000)
+            return Judge0Result(3, "Accepted", "999\n", "", "", 0.02, 2000, None)
         # 정답 흉내: "a b" -> a+b
         a, b = (int(x) for x in stdin.split())
-        return Judge0Result(3, "Accepted", f"{a + b}\n", "", "", 0.02, 2000)
+        return Judge0Result(3, "Accepted", f"{a + b}\n", "", "", 0.02, 2000, None)
 
 
 app.dependency_overrides[get_judge_client] = lambda: FakeJudge0Client()
@@ -159,7 +166,13 @@ def run() -> None:
     check("종료된 세션 재제출 -> 409", r.status_code == 409, f"{r.status_code} {r.text}")
 
     # ---- CE / TLE / RE 판정 ----
-    for marker, expected in (("__CE__", "CE"), ("__TLE__", "TLE"), ("__RE__", "RE")):
+    for marker, expected in (
+        ("__CE__", "CE"),
+        ("__TLE__", "TLE"),
+        ("__RE__", "RE"),
+        ("__MLE__", "MLE"),
+        ("__MLE_SIGKILL__", "MLE"),
+    ):
         sid2 = _start_session(token_a, 1)
         r = submit(token_a, sid2, marker)
         check(f"POST /submissions {expected} -> 200", r.status_code == 200, f"{r.status_code} {r.text}")

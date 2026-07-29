@@ -6,10 +6,11 @@
 
 import sys
 
-from app.schema.analysis import EditOp
+from app.schema.analysis import DeleteBurst, EditOp
 from app.worker.astsupport import load_parser
 from app.worker.patterns import match_patterns
 from app.worker.pipeline import analyze_session
+from app.worker.pivot import count_local_rewrites
 from app.worker.replay import ReplayEngine
 
 FAILURES = []
@@ -172,10 +173,43 @@ def test_pipeline():
     check("pipeline degraded (K<50)", r4.analysis_level == "degraded", r4.analysis_level)
 
 
+# ---- 4) 국소 반복 수정(local rewrite) 클러스터 탐지 ----
+def test_local_rewrites():
+    events = [
+        EditOp(t=0, op=1, pos=10, len=1),
+        EditOp(t=1000, op=1, pos=12, len=1),
+        EditOp(t=2000, op=1, pos=9, len=1),
+        EditOp(t=100_000, op=1, pos=500, len=1),
+        EditOp(t=200_000, op=1, pos=505, len=1),
+    ]
+
+    def burst(idx: int, t: int) -> DeleteBurst:
+        return DeleteBurst(
+            start_index=idx, end_index=idx, t_ms=t,
+            deleted_chars=50, rewrite_horizon=idx, pivot_type="TYPO",
+        )
+
+    clustered = [burst(0, 0), burst(1, 1000), burst(2, 2000)]
+    isolated = [burst(3, 100_000), burst(4, 200_000)]
+
+    check(
+        "local rewrite cluster (3, near offset, short gap)",
+        count_local_rewrites(clustered + isolated, events) == 3,
+        f"got={count_local_rewrites(clustered + isolated, events)}",
+    )
+    check(
+        "local rewrite below threshold (2 bursts) not counted",
+        count_local_rewrites(isolated, events) == 0,
+        f"got={count_local_rewrites(isolated, events)}",
+    )
+    check("local rewrite empty input", count_local_rewrites([], events) == 0)
+
+
 if __name__ == "__main__":
     test_replay_exact()
     test_patterns()
     test_pipeline()
+    test_local_rewrites()
     print()
     if FAILURES:
         print(f"{len(FAILURES)} failure(s): {FAILURES}")

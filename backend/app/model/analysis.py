@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, Integer, String
+from sqlalchemy import Column, DateTime, Float, Integer, String
 from app.database import Base
 
 # dev-plan §4.2 Feature Store. 계획서는 ClickHouse 기준이지만
@@ -54,6 +54,10 @@ class PivotEventRow(Base):
     deleted_chars = Column(Integer, nullable=False)
     pivot_type = Column(String, nullable=False, default="")
     pattern = Column(String, nullable=False, default="")
+    # addendum §7: "rule"(결정론적 분류) | "llm"(구조 분류기 후보). llm 행은 통계 제외.
+    source = Column(String, nullable=False, default="rule", server_default="rule")
+    classifier_version = Column(String, nullable=True)   # source="llm"일 때만
+    confidence = Column(Float, nullable=True)            # source="llm"일 때만
 
 
 class PatternWindowRow(Base):
@@ -69,3 +73,8 @@ class PatternWindowRow(Base):
     formation_ms = Column(Integer, nullable=False)
     pause_ms_in_window = Column(Integer, nullable=False, default=0)
     pivot_count_in_window = Column(Integer, nullable=False, default=0)
+    # addendum §7: "rule" | "llm_candidate". llm_candidate는 기준선 삽입·피드백 프롬프트에서 제외.
+    source = Column(String, nullable=False, default="rule", server_default="rule")
+    classifier_version = Column(String, nullable=True)   # 프롬프트+모델 버전 (백필 기준)
+    confidence = Column(Float, nullable=True)
+    proposed_label = Column(String, nullable=True)       # pattern="OTHER"일 때 LLM 제안 라벨 (주 1회 검수 대상)

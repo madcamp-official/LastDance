@@ -12,6 +12,7 @@ from typing import Dict, List, Optional, Tuple
 from app.schema.analysis import (
     AnalysisResult,
     DeleteBurst,
+    DiffEvent,
     EditOp,
     PatternMatch,
     PatternWindowResult,
@@ -25,6 +26,7 @@ from app.worker.patterns import match_patterns
 from app.worker.pause import detect_pauses
 from app.worker.pivot import StructSnapshot, classify_pivot, count_local_rewrites, detect_bursts
 from app.worker.replay import ReplayEngine
+from app.worker.structdiff import ShapeSnapshot, diff_snapshots, extract_unmatched_segments
 
 MIN_EVENTS = 50                     # K < 50 → 분석 제외 (§8: 문제 열람만 하고 이탈)
 DEBOUNCE_CHARS = 200                # 직전 매칭 이후 변경 누적 임계값 (§4.1 Step 5)
@@ -106,14 +108,21 @@ def analyze_session(
     final_matches: List[PatternMatch] = []
     body_entry_ms: Optional[int] = None                 # 첫 함수 본문 진입 시각
     chars_since_match = 0
+    prev_shape: Optional[ShapeSnapshot] = None          # 직전 매처 실행 시점 구조 스냅샷
+    diff_timeline: List[DiffEvent] = []                 # 매처 실행 시점 간 구조 diff 누적
 
     def run_matcher(t_ms: int, at_end: bool = False) -> None:
-        nonlocal chars_since_match, final_matches
+        nonlocal chars_since_match, final_matches, prev_shape
         matches = match_patterns(engine.tree, engine.source_bytes(), norm_lang)
         for m in matches:
             first_complete_ms.setdefault(m.pattern, t_ms)
         if at_end:
             final_matches = matches
+        # 구조 diff 추출 (addendum §2): 매처와 같은 디바운스 시점에만 스냅샷을 떠서
+        # 세션당 diff 이벤트 수가 매처 실행 횟수 P와 같은 규모로 수렴한다.
+        shape = ShapeSnapshot(engine.tree, engine.source_bytes())
+        diff_timeline.extend(diff_snapshots(prev_shape, shape, t_ms))
+        prev_shape = shape
         chars_since_match = 0
 
     for i, ev in enumerate(events):
@@ -204,6 +213,13 @@ def analyze_session(
                     win.pivot_count_in_window += 1
             windows.append(win)
 
+    # ---- UNMATCHED 세그먼트 추출 (addendum §2~3, 결정론적) ----
+    unmatched = (
+        extract_unmatched_segments(diff_timeline, windows, engine.tree, engine.source_bytes())
+        if full
+        else []
+    )
+
     # ---- Phase 세그멘테이션 (§4.1 Step 7) ----
     t_end = events[-1].t
     setup_end = body_entry_ms if body_entry_ms is not None else t_end
@@ -247,4 +263,5 @@ def analyze_session(
         pivots=pivots,
         pattern_windows=windows,
         patterns_detected=sorted({m.pattern for m in final_matches}),
+        unmatched_segments=unmatched,
     )
