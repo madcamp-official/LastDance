@@ -267,6 +267,74 @@ ID 표기: `problem_id`는 `db-schema.md`의 `problems.id`(BIGSERIAL) 그대로 
 
 **구현 완료**: Ingest Gateway가 실제로 붙어(`backend/app/api/ingest.py`) 위 계약대로 GET 조회 전용으로 동작한다. `POST /sessions/{session_id}/analysis`(동기 임시 경로)는 제거됨.
 
+> **2026-07-30 — 과거 세션 전용으로 격하** (`git-timeline-feedback-spec.md` §3.4, §6): AST 패턴 매처 파이프라인이 git 방식 타임라인으로 교체되면서 `pause_events`/`pivot_events`/`pattern_windows`/`unmatched_segments`/`ast_trees`는 **신규 기록이 중단**됐다(테이블은 과거 세션 조회 호환을 위해 유지). 따라서 신규 세션에서 이 엔드포인트는 `result.pauses`/`pivots`/`pattern_windows`/`patterns_detected`가 항상 빈 값이고, `result.matcher_version` 자리에는 `timeline_version`이, `formation_ms`/`debug_ms`/`refine_ms`에는 세그먼트 라벨 합산값이 들어간다(§3.4). `GET /sessions/{id}/ast-evolution`도 동일하게 신규 세션에서는 404다. **신규 세션은 아래 `/timeline`·`/insights`를 사용한다.**
+
+---
+// git-timeline-feedback-spec.md와 같이 읽어야 이해하기 쉬움.
+## 타임라인 · 인사이트 (Timeline) — 신규
+
+`git-timeline-feedback-spec.md` §2·§4 Replay Worker 산출물 조회. 분석 파이프라인이 조회 전용인 점은 위 Analysis 절과 동일(`session.end` → 큐 → 세션당 1회 처리·저장 → 프런트 폴링).
+
+| Method | Endpoint | 설명 | 응답 |
+|---|---|---|---|
+| GET | `/sessions/{session_id}/timeline` | 커밋 로그 + 세그먼트 라벨 (타임라인 UI용) | 200 / 202(처리 중) / 404 |
+| GET | `/sessions/{session_id}/insights` | 본인 세션의 논리 단계별 인사이트 | 200 (인사이트 없으면 빈 배열) |
+
+**GET /sessions/{session_id}/timeline** 쿼리: `include_hunks`(bool, 기본 `true` — 커밋별 라인 diff 포함), `include_snapshots`(bool, 기본 `false` — 제출·종료 시점 전체 코드 포함).
+
+응답 (`app/schema/timeline.py` `TimelineResponse`):
+
+| 키 | 타입 | 예시 | 설명 |
+|---|---|---|---|
+| session_id | string | `"s_001"` | |
+| timeline_version | integer | `1` | Stage A 규칙 버전. 버전업 시 raw blob 재생으로 백필(§7) |
+| analysis_level | string (enum) | `"full"` | `"full"` \| `"degraded"`(seq 누락/이벤트 없음). 언어 무관 — tree-sitter를 쓰지 않는다 |
+| total_ms / keystroke_count | integer | `600000` / `842` | keystroke는 `src="user"` 이벤트만 |
+| verdict_seq | array\<string\> | `["WA","AC"]` | 제출 순서대로 |
+| commits[] | array\<object\> | 아래 참고 | 편집 커밋 + 제출 레코드가 같은 `seq` 공간을 공유 |
+| commits[].seq / kind | integer / string | `3` / `"edit"` | `kind`: `"edit"` \| `"submit"` |
+| commits[].t_ms | integer | `310000` | 커밋을 닫은 시각 (세션 시작 기준) |
+| commits[].pause_before_ms | integer | `78000` | 이 커밋을 **시작하기 전에** 입력이 없던 시간. 커밋 경계 임계값은 5000ms |
+| commits[].duration_ms | integer | `31000` | 커밋 안에서 실제 타이핑한 시간 |
+| commits[].hunks[] | array\<object\> | 아래 참고 | `include_hunks=false`면 `[]` |
+| commits[].hunks[].op | string (enum) | `"mod"` | `"add"` \| `"del"` \| `"mod"` |
+| commits[].hunks[].old_start / new_start | integer | `12` / `12` | 1-based. **그 커밋 시점 스냅샷 기준** — 이후 커밋의 추가/삭제로 물리 라인 번호가 밀린다 |
+| commits[].hunks[].old_lines / new_lines | array\<string\> | `["..."]` | del/mod 전 원문 / add/mod 후 원문 |
+| commits[].verdict | string \| null | `"WA"` | `kind="submit"`일 때만. `AC`\|`WA`\|`TLE`\|`RE`\|`CE`\|`PENDING` |
+| commits[].lines_added / lines_deleted / lines_modified / net_lines | integer | `3`/`1`/`2`/`2` | `net_lines` = 추가 − 삭제 |
+| commits[].churn_lines | integer | `2` | 이 커밋에서 만진 라인 중 누적 2회 이상 수정된 라인 수 (stable line id 기준, §2.3) |
+| commits[].snapshot_hash | string | `"9f2c..."` | 커밋 직후 전체 코드 해시(sha256 앞 16자) |
+| commits[].snapshot_text | string \| null | `null` | 제출·세션 종료 커밋만. `include_snapshots=true`일 때만 채워짐 |
+| commits[].segment_label | string | `"STALL_SUSPECT"` | 소속 세그먼트 라벨 (제출 레코드는 `""`) |
+| segments[] | array\<object\> | 아래 참고 | 같은 라벨의 연속 편집 커밋 묶음. 제출이 경계 |
+| segments[].seg_id / label | string | `"sg_2"` / `"STALL_SUSPECT"` | 라벨: `STALL_SUSPECT`\|`HIGH_CHURN`\|`DEBUG_LOOP`\|`BURST_WRITE`\|`STEADY` |
+| segments[].commit_start_seq / commit_end_seq | integer | `4` / `6` | |
+| segments[].t_start_ms / t_end_ms | integer | `240000` / `310000` | |
+| segments[].pause_ms / lines_touched / net_lines | integer | `78000` / `12` / `2` | |
+
+세그먼트 라벨은 결정론적 전처리기가 통계 규칙으로 붙인 것이며 LLM이 뒤집을 수 없다(§2.4). **UI 문구 주의**: `HIGH_CHURN`/`BURST_WRITE`는 "코드가 많이 바뀐 구간"이지 "어려웠던 구간"이 아니다 — "어려웠던 구간"으로 표시해도 되는 것은 `STALL_SUSPECT`뿐이다.
+
+**GET /sessions/{session_id}/insights** 응답 (`app/schema/insight.py` `InsightsResponse`): `status="valid"` 인사이트만 노출(검증 실패분 `discarded`는 메트릭 전용이라 제외).
+
+| 키 | 타입 | 예시 | 설명 |
+|---|---|---|---|
+| insights[].stage / stage_ko | string | `"CORE_LOGIC_DESIGN"` / `"핵심 논리 설계"` | 아래 정준 값 |
+| insights[].category | string (enum) | `"stall"` | `"stall"`(사고 단계에서 막힘) \| `"churn"` \| `"debug_loop"` \| `"smooth"`(잘한 점) |
+| insights[].logic_label | string | `"문제 고유 탐색 정책의 조건 처리"` | 풀이 논리 수준의 구체적 명명 |
+| insights[].description | string | `"@c4 앞 78초 정지 후 while 조건이 처음 등장"` | 근거 요약 (한국어 1~2문장) |
+| insights[].severity | string (enum) | `"high"` | `"high"` \| `"medium"` \| `"low"` |
+| insights[].commit_start_seq / commit_end_seq | integer | `4` / `6` | 이 인사이트에 대응하는 타임라인 구간 |
+| insights[].t_start_ms / t_end_ms / duration_ms | integer | `240000` / `310000` / `70000` | |
+| insights[].evidence | array\<string\> | `["c3 앞 64초 정지"]` | |
+| insights[].advice | string \| null | `"..."` | 개선 제안 1문장. 피드백 생성기는 이 필드에 있는 내용만 쓴다 |
+| insights[].analyzer_version | string | `"session-analyzer-v1/qwen3-coder:30b-a3b"` | 프롬프트+모델 버전 (백필 기준) |
+
+stage 정준 값: `PROBLEM_UNDERSTANDING`(문제 이해·관찰), `APPROACH_DESIGN`(접근 설계), `CORE_LOGIC_DESIGN`(핵심 논리 설계), `SCAFFOLD_IMPLEMENTATION`(뼈대 구현), `CORE_IMPLEMENTATION`(핵심 논리 코드화), `EDGE_CASE_HANDLING`(경계·예외 처리), `DEBUG_LOGIC`(논리 오류 디버깅), `DEBUG_TRIVIAL`(사소한 디버깅), `OPTIMIZATION`(시간/공간 최적화).
+
+에러: 404 `{"error": {"code": "SESSION_NOT_FOUND", ...}}` / 404 `TIMELINE_NOT_FOUND`(세션은 있지만 타임라인 없음) / 403 `FORBIDDEN`
+
+> 인사이트는 LLM(Stage B)이 세션당 1회 만들고 결정론적 검증(enum·커밋 범위·시간 범위·라벨 정합)을 통과한 것만 저장되므로, LLM 미가용/검증 실패 시 `insights`가 빈 배열일 수 있다. 타임라인(`/timeline`)은 LLM과 무관하게 항상 채워진다.
+
 ---
 
 ## 피드백 (Feedback) — 통로만 확정, 내용 미확정
@@ -288,6 +356,8 @@ ID 표기: `problem_id`는 `db-schema.md`의 `problems.id`(BIGSERIAL) 그대로 
 
 > 필드 구조(`feedback_id`, `text`, `model_used`, `generated_at`)는 유지한 채 `text`의 실제 내용/품질만 팀A 산출물 확정 후 달라지도록 설계 — 프론트엔드 파싱 로직 변경 최소화 목적
 
+> **2026-07-30 내부 재작성** (`git-timeline-feedback-spec.md` §5): **응답 스키마 불변.** 프롬프트 근거가 AST 패턴/pause 라벨에서 **본인 세션의 논리 단계별 인사이트 + 같은 문제를 푼 다른 사용자와의 비교군 집계**로 교체됐다. grounding 검증(입력에 없는 숫자 차단, 최대 2회 재시도)은 그대로이고, 최종 실패 시 폴백은 인사이트 기반 템플릿(인사이트 0개면 세그먼트 통계)으로 바뀌었다. LLM 서버 미가용 시 문구는 종전과 동일.
+
 **PATCH /feedback/{feedback_id}/rating** 요청: `rating`(string enum, 필수, `"up"` \| `"down"`)
 
 ---
@@ -308,6 +378,10 @@ ID 표기: `problem_id`는 `db-schema.md`의 `problems.id`(BIGSERIAL) 그대로 
 | cluster_id | int \| null | 문제 클러스터. `-1`은 tier 단독 fallback |
 | metrics | array | 아래 BaselineMetric 목록. **비어 있으면 "비교 불가" 처리** |
 
-BaselineMetric: `metric`(`total_duration`(초)/`attempt_count`/`pivot_count`/`pause_ms@LABEL`), `percentiles`(`p10`~`p90`), `n_real`, `n_synthetic`, `data_source`(`observed` \| `estimated` — `n_real < 30`이면 `estimated`, 리포트에 "추정치 기반" 명시), `user_value`/`user_band`(세션 문맥 있을 때만, stats 엔드포인트에서는 null).
+BaselineMetric: `metric`(`total_duration`(초)/`attempt_count`/`stage_ms@STAGE`(초)), `percentiles`(`p10`~`p90`), `n_real`, `n_synthetic`(타임라인 파이프라인은 합성 표본을 쓰지 않아 항상 `0`), `data_source`(`observed` \| `estimated` — `n_real < 30`이면 `estimated`, 리포트에 "추정치 기반" 명시), `user_value`/`user_band`(세션 문맥 있을 때만, stats 엔드포인트에서는 null).
 
-> 데이터 출처: `backend/app.db`의 `baseline_cell` (AtCoder_100 실측 + IRT 합성 비교군, `app-db-ingestion-spec.md` §4).
+> **2026-07-30 변경** (`git-timeline-feedback-spec.md` §5.1, §6): 내부 집계를 합성 기준선(`baseline_cell`, tier×cluster 셀)에서 **같은 `problem_id`를 푼 실제 세션의 인사이트 집계**(`problem_feedback_insights` + `code_commits`, `backend/app/util/cohort.py`)로 교체했다. 응답 스키마는 프론트 호환을 위해 그대로 유지하고 metric 이름만 바뀌었다.
+> - `pivot_count`/`pause_ms@LABEL` metric은 더 이상 나오지 않는다 (AST pivot·pause 라벨 개념 폐기).
+> - `stage_ms@STAGE`의 `STAGE`는 아래 [인사이트 stage 정준 값](#타임라인--인사이트-timeline) 참고.
+> - 표본 `n < 5`인 metric은 응답에서 아예 제외한다 — 신뢰 불가 + 자기효능감 보호(연구 5). 문제별 표본이 쌓이기 전에는 `metrics`가 비어 "비교 불가"로 동작하므로 콜드스타트에 합성 데이터가 필요 없다.
+> - `source_problem_id`/`tier`/`cluster_id`는 항상 null (합성 셀 연결이 없어짐).

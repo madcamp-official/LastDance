@@ -1,8 +1,16 @@
+"""Stage C — 피드백 작성기 (git-timeline-feedback-spec.md §5).
+
+본인 세션의 논리 단계별 인사이트(problem_feedback_insights) + 같은 문제를 푼 다른
+사용자와의 비교군 집계(app/util/cohort.py)를 프롬프트로 조립해 한국어 피드백을 만든다.
+AST 패턴/pivot 기반 프롬프트(구 구현)는 폐기됐다 — 조언 문구도 LLM 자유 창작이 아니라
+인사이트의 advice 필드에서만 온다 (§5.2 규칙 5, 연구 2 feed-forward 규약 유지).
+"""
+
 import logging
 import uuid
-from collections import Counter
+from collections import defaultdict
 from datetime import UTC, datetime
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
@@ -10,21 +18,23 @@ from sqlalchemy.orm import Session
 from app.api.auth import APIError
 from app.database import get_db
 from app.llm.client import LLM_MODEL, LLMUnavailable, VLLMClient
-from app.llm.grounding import build_template_feedback, verify_grounding
-from app.model.analysis import PatternWindowRow, PauseEventRow, PivotEventRow, SessionSummary
+from app.llm.grounding import build_timeline_template_feedback, verify_grounding
+from app.model.analysis import SessionSummary
 from app.model.feedback import Feedback
+from app.model.insight import ProblemFeedbackInsight
 from app.model.problem import Problem
 from app.model.session import Submission
-from app.model.submission import JudgeSubmission
+from app.model.timeline import CodeCommitRow, SessionSegmentRow
 from app.model.user import User
-from app.schema.baseline import ProblemBaselineResponse
 from app.schema.feedback import (
     FeedbackRatingRequest,
     FeedbackRatingResponse,
     FeedbackRequest,
     FeedbackResponse,
 )
-from app.util.baseline import build_baseline, build_self_reference
+from app.schema.insight import CohortSummary
+from app.util.baseline import build_self_reference
+from app.util.cohort import build_cohort, stage_ko
 from app.util.security import get_current_user
 
 router = APIRouter(prefix="/feedback", tags=["feedback"])
@@ -33,75 +43,32 @@ logger = logging.getLogger("app.api.feedback")
 _FALLBACK_TEXT = "피드백 생성 서버에 연결할 수 없어 잠시 후 다시 시도해 주세요."
 _MAX_GROUNDING_RETRIES = 2  # dev-plan §7.3 — 최초 1회 + 재시도 2회
 
-# app.worker.pivot.PIVOT_APPROACH_SWITCH — 여기선 문자열 상수만 복제(워커 의존 회피)
-_PIVOT_APPROACH_SWITCH = "APPROACH_SWITCH"
-_APPROACH_SWITCH_CHURN_THRESHOLD = 2  # 연구 4: 정지 크기보다 회복 패턴(재시도 횟수)이 신호
+# §5.2 시스템 프롬프트 (전문)
+_SYSTEM_PROMPT = """당신은 알고리즘 문제 풀이(PS) 연습 플랫폼의 튜터입니다. 사용자가 문제를 푸는 동안의 행동
+분석 결과(논리 단계별 인사이트, 시간 분포, 같은 문제를 푼 다른 사용자들과의 비교)가 주어지면,
+한국어로 피드백을 작성합니다.
 
-# 연구 2 (Hattie & Timperley, process-level feed-forward): 조언 문구를 LLM이 자유
-# 창작하게 두면 데이터에 없는 일반론("변수명을 명확히 하세요")으로 흐르기 쉽다.
-# AST 라벨(app.worker.labeler)·pivot 유형(app.worker.pivot)별로 실제 관찰 가능한
-# 행동에 근거한 조언 후보만 미리 정해두고, LLM은 그중에서 문장만 매끄럽게 만들게 한다.
-# OTHER는 특정 행동을 가리키지 않아 제외.
-_ADVICE_BANK: dict[str, List[str]] = {
-    "LOOP_BOUNDARY": [
-        "반복문 경계(시작값·종료조건)에서 멈춘 시간이 길었다면, 반복 범위를 먼저 손으로 적어본 뒤 코드로 옮기는 순서를 추천합니다.",
-        "반복 조건을 작성하기 전에 경계값(0부터인지 1부터인지, <인지 <=인지)을 작은 예시로 검증해보세요.",
-    ],
-    "BRANCH_CONDITION": [
-        "조건문 분기 앞에서 정지가 잦았다면, 각 case가 언제 참/거짓이 되는지 먼저 표로 정리해보는 것이 도움이 됩니다.",
-        "조건식이 복잡해지기 전에 나누어서 이름 있는 변수로 표현해보는 것도 시행착오를 줄이는 방법입니다.",
-    ],
-    "INDEX_REASONING": [
-        "배열/인덱스 접근 지점에서 멈췄다면, 인덱스가 0-based인지 1-based인지를 먼저 명시적으로 정하고 시작하세요.",
-        "인덱스 계산에서 정지가 있었다면 작은 예제로 인덱스 값을 손으로 추적해보는 것이 도움이 됩니다.",
-    ],
-    "INTERFACE_DESIGN": [
-        "함수 시그니처(매개변수) 설계에서 정지가 있었다면, 입력과 출력 타입을 먼저 정의한 뒤 구현에 들어가는 순서를 시도해보세요.",
-    ],
-    "ALGORITHM_ENTRY": [
-        "함수 본문을 시작하기 전에 정지가 길었다면, 전체 알고리즘을 의사코드로 먼저 스케치한 뒤 코드로 옮기는 방법을 추천합니다.",
-    ],
-    "SETUP": [
-        "초기 설계(입력 처리, 자료구조 선언) 단계에서 정지가 길었다면, 문제의 입출력 형식을 먼저 정리하고 시작하는 것이 도움이 됩니다.",
-    ],
-    "SYNTAX_STRUGGLE": [
-        "구문 오류 상태에서 멈춘 시간이 길었다면, 에러 메시지를 한 줄씩 읽고 대응하는 습관을 들여보세요.",
-        "구문 오류가 반복됐다면, 괄호·세미콜론 같은 기본 문법을 먼저 점검한 뒤 로직에 집중하는 순서를 추천합니다.",
-    ],
-    "APPROACH_SWITCH": [
-        "접근법을 여러 번 갈아엎었다면, 코드를 작성하기 전에 접근법 후보를 두세 개 비교하고 하나를 선택한 뒤 구현하는 순서를 추천합니다.",
-        "전체 재작성이 반복됐다면, 초기 접근을 정하기 전에 시간·공간 복잡도를 먼저 어림해보는 것이 도움이 됩니다.",
-    ],
-    "COMPLEXITY_FIX": [
-        "자료구조를 교체하는 재작성이 있었다면, 구현 전에 문제의 제약조건(N의 크기 등)을 보고 적절한 자료구조를 고르는 연습을 해보세요.",
-    ],
-    "EDGE_CASE_FIX": [
-        "조건식을 수정하는 재작성이 있었다면, 구현 전에 경계 케이스(빈 입력, 최댓값 등)를 먼저 나열하고 검증하는 습관을 들여보세요.",
-    ],
-    "TYPO": [
-        "구조는 그대로인데 다시 작성한 부분이 있었다면, 변수명이나 사소한 문법 실수를 먼저 점검해보는 것도 도움이 됩니다.",
-    ],
-}
-_ADVICE_CANDIDATES_PER_KEY = 2
-
-_SYSTEM_PROMPT = (
-    "당신은 코딩 테스트 연습 플랫폼의 튜터입니다. 응시자가 문제를 푸는 동안의 "
-    "행동 데이터(정지, 재작성, 구조 패턴 형성 순서 등)를 보고 피드백을 작성합니다. "
-    "정답 여부나 채점 결과 자체를 요약하지 말고, 문제를 풀어나간 '과정'(어디서 오래 "
-    "멈췄는지, 어느 기능을 구현하는 데 어려움이 있었는지, 접근 순서가 어땠는지)에 집중해서 한국어로 "
-    "4~6문장의 바람직한 개선 방향을 포함하여 피드백을 작성하되 코드가 너무 짧거나 길면 그에 맞춰서 유연하게 "
-    "피드백 길이를 조정하세요. 또한 사용자의 입력 데이터에 없는 사실은 언급하지 마세요. "
-    "사용자 프롬프트에 [조언 후보] 목록이 주어지면 개선 방향은 반드시 그 목록 중에서만 골라 "
-    "자연스러운 문장으로 녹여내고, 목록에 없는 일반적인 조언(예: '변수명을 명확히 하세요')은 "
-    "새로 만들어내지 마세요. [조언 후보]가 없다면 관찰된 사실만 언급하고 개선 방향 제시는 생략해도 됩니다."
-)
-
-
-def _dominant(values: List[Optional[str]]) -> Optional[str]:
-    counts = Counter(v for v in values if v)
-    if not counts:
-        return None
-    return counts.most_common(1)[0][0]
+[작성 규칙]
+1. 추상적 총평 금지. "디버깅이 오래 걸렸어요", "알고리즘 작성이 느렸어요" 같은 문장을 쓰지
+   마세요. 반드시 [인사이트]에 있는 logic_label 수준의 구체성으로 쓰세요.
+   좋은 예: "BFS 큐 뼈대는 1분 만에 빠르게 작성하셨지만, 문제 고유의 탐색 정책(벽을 만날
+   때까지 미끄러지는 이동)을 조건으로 옮기는 데 78초 정지를 포함해 약 4분을 쓰셨어요."
+2. [인사이트]에 없는 사실, [비교군]에 없는 수치를 만들어내지 마세요. 프롬프트에 있는 숫자만
+   인용할 수 있습니다.
+3. category를 구분해서 서술하세요:
+   - stall 인사이트 = 사고 단계에서 막힌 것. "어려워한 부분"으로 표현 가능.
+   - churn/debug_loop 인사이트 = 반복 수정. "어려워했다"가 아니라 "사소한 수정(자료형,
+     인덱스, 출력 형식 등)에 시간이 샜다"로 표현하세요. 코드 분량이 컸다는 이유로 어려웠다고
+     쓰는 것은 금지입니다.
+   - smooth 인사이트 = 잘한 점. 피드백 앞부분에 1문장으로 반드시 언급하세요.
+4. [비교군] 수치는 참고용 분포입니다. 본인 값이 p75보다 크면 "다른 사용자들보다 오래 걸린
+   편", p25보다 작으면 "빠른 편"으로 언급하되 단정적 평가·서열 표현("하위권" 등)은 피하세요.
+   "[표본 적음]" 표시가 있으면 "아직 비교 데이터가 적지만" 같은 단서를 붙이세요.
+5. 개선 방향은 [인사이트]의 advice 필드에 있는 내용만 사용하고, 자연스러운 문장으로
+   녹여내세요. advice가 모두 null이면 관찰된 사실만 서술하고 개선 방향은 생략합니다.
+   데이터에 없는 일반론("변수명을 명확히 하세요")을 새로 만들지 마세요.
+6. 분량: 4~7문장. 인사이트가 1~2개뿐이면 3~4문장으로 줄이세요.
+7. 어조: 존댓말, 과정 중심. 정답 여부 자체를 요약하거나 점수를 평가하지 마세요."""
 
 
 def _iso(dt: datetime) -> str:
@@ -125,151 +92,122 @@ def get_llm_client() -> VLLMClient:
     return VLLMClient()
 
 
-_METRIC_KO = {
-    "total_duration": "풀이 시간(초)",
-    "attempt_count": "제출 횟수",
-    "pivot_count": "재작성(pivot) 횟수",
-}
-
-_AST_LABEL_KO = {
-    "LOOP_BOUNDARY": "반복문 경계",
-    "BRANCH_CONDITION": "조건문 분기",
-    "INDEX_REASONING": "인덱스 추론",
-    "INTERFACE_DESIGN": "함수 시그니처 설계",
-    "ALGORITHM_ENTRY": "알고리즘 진입부",
-    "SETUP": "초기 설계",
-    "SYNTAX_STRUGGLE": "구문 오류",
-}
-
-# 연구 5 (규준참조 수치가 하위권 사용자 자기효능감에 해로울 수 있음): 사용자
-# 값이 코호트 중앙값보다 나쁜 편일 때는 코호트 percentile 대신 자기참조 추세를
-# 우선 노출한다.
-_SELF_REF_METRICS = ("total_duration", "pivot_count")
-_WORSE_THAN_P50_BANDS = {"p50~p75", "p75~p90", ">p90"}
-_SELF_REF_LOOKBACK = 5
+def _user_stage_durations(
+    insights: List[ProblemFeedbackInsight],
+) -> Dict[Tuple[str, str], int]:
+    """본인 세션의 (stage, category)별 소요 시간 합 — 비교군 대조용."""
+    agg: Dict[Tuple[str, str], int] = defaultdict(int)
+    for i in insights:
+        agg[(i.stage, i.category)] += int(i.duration_ms or 0)
+    return dict(agg)
 
 
 def _build_user_prompt(
     problem: Optional[Problem],
     summary: Optional[SessionSummary],
-    pauses: List[PauseEventRow],
-    pivots: List[PivotEventRow],
-    windows: List[PatternWindowRow],
-    latest: Optional[JudgeSubmission],
-    baseline: Optional[ProblemBaselineResponse] = None,
-    verdict_seq: Optional[List[str]] = None,
+    insights: List[ProblemFeedbackInsight],
+    verdict_seq: List[str],
+    lang: Optional[str],
+    cohort: Optional[CohortSummary],
     self_reference: Optional[dict] = None,
 ) -> str:
-    lines: List[str] = []
-    lines.append(f"[문제] {problem.title if problem else '알 수 없음'}")
+    """§5.3 사용자 프롬프트 템플릿."""
+    lines: List[str] = [f"[문제] {problem.title if problem else '알 수 없음'}", ""]
 
-    if summary:
-        lines.append(
-            "[시간 분포 ms] "
-            f"설계(setup)={summary.setup_ms}, 형성(formation)={summary.formation_ms}, "
-            f"디버그(debug)={summary.debug_ms}, 다듬기(refine)={summary.refine_ms}, "
-            f"총={summary.total_ms}"
-        )
-        lines.append(f"[정지] 총 {summary.pause_count}회, 누적 {summary.pause_total_ms}ms")
-        lines.append(f"[재작성(pivot)] 총 {summary.pivot_count}회")
-    else:
-        lines.append("[분석 데이터 없음] 아직 행동 분석이 완료되지 않았습니다.")
+    total_ms = summary.total_ms if summary else 0
+    lines.append("[세션 개요]")
+    lines.append(
+        f"총 소요 {total_ms / 60000:.1f}분, 제출 {len(verdict_seq)}회 "
+        f"({' → '.join(verdict_seq) if verdict_seq else '제출 없음'}), 언어 {lang or '알 수 없음'}"
+    )
+    lines.append("")
 
-    if pauses:
-        top_pauses = sorted(pauses, key=lambda p: p.duration_ms, reverse=True)[:5]
-        pause_desc = "; ".join(
-            f"{p.duration_ms}ms(phase={p.phase or '?'}, pattern={p.pattern or '?'})"
-            for p in top_pauses
-        )
-        lines.append(f"[주요 정지 구간] {pause_desc}")
-
-    if pivots:
-        pivot_desc = "; ".join(
-            f"{p.deleted_chars}자 삭제(type={p.pivot_type or '?'}, pattern={p.pattern or '?'})"
-            for p in pivots[:5]
-        )
-        lines.append(f"[주요 재작성] {pivot_desc}")
-
-    if windows:
-        window_parts = []
-        for w in windows:
-            switches = sum(
-                1 for p in pivots if p.pattern == w.pattern and p.pivot_type == _PIVOT_APPROACH_SWITCH
+    lines.append("[인사이트 — 이 사용자의 이번 세션 분석 결과]")
+    if insights:
+        for i in insights:
+            lines.append(
+                f"- ({i.category}/{i.stage}, severity={i.severity}) {i.logic_label}"
             )
-            if switches == 0:
-                tag = "원활한 형성"
-            elif switches >= _APPROACH_SWITCH_CHURN_THRESHOLD:
-                tag = f"접근법을 {switches}회 갈아엎음"
-            else:
-                tag = None
-            desc = f"{w.pattern}({w.formation_ms}ms 형성"
-            if tag:
-                desc += f", {tag}"
-            desc += ")"
-            window_parts.append(desc)
-        lines.append(f"[구조 패턴 형성 순서] {'; '.join(window_parts)}")
+            lines.append(
+                f"  구간: 세션 {i.t_start_ms / 60000:.0f}분~{i.t_end_ms / 60000:.0f}분 지점, "
+                f"{i.duration_ms / 1000:.0f}초 소요"
+            )
+            lines.append(f"  관찰: {i.description}")
+            if i.advice:
+                lines.append(f"  개선 후보: {i.advice}")
+    else:
+        lines.append("- (분석 인사이트가 없습니다. 아래 기록만으로 서술하세요.)")
+    lines.append("")
 
-    candidates: List[str] = []
-    dominant_label = _dominant([p.ast_label for p in pauses])
-    if dominant_label and dominant_label in _ADVICE_BANK:
-        candidates.extend(_ADVICE_BANK[dominant_label][:_ADVICE_CANDIDATES_PER_KEY])
-    dominant_pivot = _dominant([p.pivot_type for p in pivots])
-    if dominant_pivot and dominant_pivot in _ADVICE_BANK:
-        candidates.extend(_ADVICE_BANK[dominant_pivot][:_ADVICE_CANDIDATES_PER_KEY])
-    if candidates:
-        lines.append("[조언 후보] " + " / ".join(candidates))
-
-    if verdict_seq:
-        lines.append(f"[제출 이력] {' → '.join(verdict_seq)}")
-    elif latest:
-        lines.append(f"[최종 제출] verdict={latest.verdict or '채점 전'}, language={latest.language}")
-
-    self_reference = self_reference or {}
-    if baseline and baseline.metrics:
-        lines.append(f"[비교군 기준선] tier={baseline.tier}, 같은 유형 문제를 푼 다른 응시자들과의 비교:")
-        for m in baseline.metrics:
-            if m.metric in _METRIC_KO:
-                label_ko = _METRIC_KO[m.metric]
-            elif m.metric.startswith("pause_ms@"):
-                ast_label = m.metric.split("@", 1)[1]
-                label_ko = f"{_AST_LABEL_KO.get(ast_label, ast_label)} 지점 정지 시간(ms)"
-                if ast_label != dominant_label:
-                    continue  # 이번 세션에서 실제로 지배적이었던 라벨만 노출
-            else:
-                continue
-
-            if (
-                m.metric in _SELF_REF_METRICS
-                and m.metric in self_reference
-                and m.user_band in _WORSE_THAN_P50_BANDS
-                and m.user_value is not None
-            ):
-                prev_avg, n_sessions = self_reference[m.metric]
-                if m.user_value < prev_avg * 0.95:
-                    direction = "감소"
-                elif m.user_value > prev_avg * 1.05:
-                    direction = "증가"
-                else:
-                    direction = "비슷"
-                lines.append(
-                    f"  - {label_ko}: 최근 {n_sessions}회 세션 평균({prev_avg:.0f}) 대비 "
-                    f"이번 세션({m.user_value:.0f})이 {direction}"
-                )
-                continue
-
-            p = m.percentiles
-            line = f"  - {label_ko}: 비교군 p25={p.p25:.0f}, 중앙값={p.p50:.0f}, p75={p.p75:.0f}"
-            if m.user_value is not None:
-                line += f" / 이번 세션={m.user_value:.0f} (구간 {m.user_band})"
-            if m.data_source == "estimated":
-                line += " [추정치 기반]"
-            lines.append(line)
+    if cohort and cohort.exposable:
+        lines.append(f"[비교군 — 이 문제를 푼 다른 사용자 {cohort.session_count}명 기준]")
+        for s in cohort.stages:
+            user_part = (
+                f" / 이번 세션 {s.user_duration_ms / 1000:.0f}초"
+                if s.user_duration_ms is not None
+                else " / 이번 세션 해당 단계 기록 없음"
+            )
+            small = " [표본 적음]" if s.small_sample else ""
+            lines.append(
+                f"- {stage_ko(s.stage)}({s.top_logic_label}): 소요 시간 "
+                f"p25={s.p25 / 1000:.0f}초, 중앙값={s.p50 / 1000:.0f}초, p75={s.p75 / 1000:.0f}초"
+                f"{user_part}{small}"
+            )
+            lines.append(
+                f"  (이 문제 응시자의 {s.occurrence_rate:.0%}가 같은 단계에서 막힘)"
+            )
+        if cohort.total_ms_p50 is not None:
+            lines.append(
+                f"- 전체 풀이 시간: 중앙값 {cohort.total_ms_p50 / 60000:.1f}분 "
+                f"/ 이번 세션 {total_ms / 60000:.1f}분"
+            )
+        if cohort.attempt_count_p50 is not None:
+            lines.append(
+                f"- 제출 횟수: 중앙값 {cohort.attempt_count_p50:.0f}회 "
+                f"/ 이번 세션 {len(verdict_seq)}회"
+            )
+    else:
         lines.append(
-            "  비교군 수치는 참고용 분포다. 사용자의 값이 p75보다 크면 상대적으로 오래/많이 걸린 편, "
-            "p25보다 작으면 빠른/적은 편으로 언급하되 단정적 평가는 피할 것."
+            "[비교군] 아직 이 문제의 비교 데이터가 충분하지 않습니다. "
+            "비교 언급 없이 본인 기록만 서술하세요."
         )
+    lines.append("")
 
+    # 연구 5 자기참조 규약: 본인 값이 중앙값보다 나쁠 때만 과거 세션 추세를 노출
+    self_reference = self_reference or {}
+    worse_than_median = (
+        cohort is not None
+        and cohort.total_ms_p50 is not None
+        and total_ms > cohort.total_ms_p50
+    )
+    if worse_than_median and "total_duration" in self_reference:
+        prev_avg, n_sessions = self_reference["total_duration"]
+        cur_sec = total_ms / 1000.0
+        if cur_sec < prev_avg * 0.95:
+            direction = "감소"
+        elif cur_sec > prev_avg * 1.05:
+            direction = "증가"
+        else:
+            direction = "비슷"
+        lines.append(
+            f"[자기 참조] 최근 {n_sessions}회 세션 평균 풀이 시간 {prev_avg / 60:.1f}분 대비 "
+            f"이번 세션 {total_ms / 60000:.1f}분 ({direction})"
+        )
+        lines.append("")
+
+    lines.append("위 데이터로 피드백을 작성하세요.")
     return "\n".join(lines)
+
+
+def _verdict_seq(db: Session, session_id: str) -> List[str]:
+    """커밋 로그의 SUBMIT 레코드가 권위 소스 (§2.1). 없으면 빈 리스트."""
+    rows = (
+        db.query(CodeCommitRow)
+        .filter(CodeCommitRow.sid == session_id, CodeCommitRow.kind == "submit")
+        .order_by(CodeCommitRow.seq.asc())
+        .all()
+    )
+    return [r.verdict or "PENDING" for r in rows]
 
 
 @router.post("", response_model=FeedbackResponse)
@@ -292,44 +230,31 @@ async def create_feedback(
 
     problem = db.query(Problem).filter(Problem.problem_id == sub.problem_id).first()
     summary = db.query(SessionSummary).filter(SessionSummary.sid == body.session_id).first()
-    pauses = db.query(PauseEventRow).filter(PauseEventRow.sid == body.session_id).all()
-    # llm-structural-classifier-addendum §7: llm_candidate/llm 행은 검수 전 후보라
-    # 피드백 프롬프트(=grounding 근거)에 넣지 않는다. 결정론적 rule 행만 사용.
-    pivots = (
-        db.query(PivotEventRow)
-        .filter(PivotEventRow.sid == body.session_id, PivotEventRow.source == "rule")
+    insights = (
+        db.query(ProblemFeedbackInsight)
+        .filter(
+            ProblemFeedbackInsight.sid == body.session_id,
+            ProblemFeedbackInsight.status == "valid",
+        )
+        .order_by(ProblemFeedbackInsight.t_start_ms.asc())
         .all()
     )
-    windows = (
-        db.query(PatternWindowRow)
-        .filter(PatternWindowRow.sid == body.session_id, PatternWindowRow.source == "rule")
+    segments = (
+        db.query(SessionSegmentRow)
+        .filter(SessionSegmentRow.sid == body.session_id)
+        .order_by(SessionSegmentRow.commit_start_seq.asc())
         .all()
     )
-    submissions_hist = (
-        db.query(JudgeSubmission)
-        .filter(JudgeSubmission.session_id == body.session_id)
-        .order_by(JudgeSubmission.submitted_at.asc())
-        .all()
-    )
-    latest = submissions_hist[-1] if submissions_hist else None
-    verdict_seq = [s.verdict or "PENDING" for s in submissions_hist]
+    verdict_seq = _verdict_seq(db, body.session_id)
 
-    # 비교군 기준선: 세션 실측값을 metric 단위에 맞춰 전달
-    # (total_duration 기준선은 초 단위 — session_summaries.total_ms를 초로 변환)
-    user_values = {}
-    if summary:
-        user_values["total_duration"] = summary.total_ms / 1000.0
-        user_values["pivot_count"] = float(summary.pivot_count)
-    n_judged = len(submissions_hist)
-    if n_judged:
-        user_values["attempt_count"] = float(n_judged)
-    dominant_pause_label = _dominant([p.ast_label for p in pauses])
-    if dominant_pause_label:
-        label_durations = [p.duration_ms for p in pauses if p.ast_label == dominant_pause_label]
-        if label_durations:
-            user_values[f"pause_ms@{dominant_pause_label}"] = float(max(label_durations))
-    baseline = build_baseline(db, problem, user_values) if problem else None
-
+    cohort = build_cohort(
+        db,
+        problem_id=sub.problem_id,
+        exclude_sid=body.session_id,
+        user_durations=_user_stage_durations(insights),
+        user_total_ms=summary.total_ms if summary else None,
+        user_attempt_count=len(verdict_seq),
+    )
     self_reference = (
         build_self_reference(db, current_user.user_id, summary.tier, body.session_id)
         if summary
@@ -337,8 +262,8 @@ async def create_feedback(
     )
 
     user_prompt = _build_user_prompt(
-        problem, summary, pauses, pivots, windows, latest, baseline,
-        verdict_seq=verdict_seq, self_reference=self_reference,
+        problem, summary, insights, verdict_seq, sub.language, cohort,
+        self_reference=self_reference,
     )
 
     try:
@@ -356,7 +281,8 @@ async def create_feedback(
                 body.session_id, attempt + 1, _MAX_GROUNDING_RETRIES + 1, ungrounded_numbers,
             )
         else:
-            text = build_template_feedback(problem, summary, pauses, pivots, windows, latest, baseline)
+            # §5.4: 인사이트 기반 템플릿 폴백 (인사이트 0개면 세그먼트 통계로)
+            text = build_timeline_template_feedback(insights, segments, summary)
             model_used = last_model
     except LLMUnavailable:
         text, model_used = _FALLBACK_TEXT, LLM_MODEL

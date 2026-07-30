@@ -16,7 +16,7 @@ from app.schema.problem import (
     ProblemListItem,
     ProblemListResponse,
 )
-from app.util.baseline import build_baseline
+from app.util.cohort import build_cohort_baseline
 from app.util.security import get_current_user_optional
 
 router = APIRouter(prefix="/problems", tags=["problems"])
@@ -116,8 +116,9 @@ async def get_problem(problem_id: int, db: Session = Depends(get_db)):
 
 @router.get("/{problem_id}/stats", response_model=ProblemBaselineResponse)
 async def get_problem_stats(problem_id: int, db: Session = Depends(get_db)):
-    # 다른 응시자 대비 통계 — AtCoder 비교군 기준선(baseline_cell, app-db-ingestion-spec.md §4).
-    # metrics가 비어 있으면 이 문제는 비교군 미보유("비교 불가" 처리).
+    # 다른 응시자 대비 통계 — 같은 문제를 푼 실제 세션의 인사이트 집계
+    # (git-timeline-feedback-spec.md §5.1, §6). 합성 기준선(baseline_cell) 의존 제거.
+    # metrics가 비어 있으면 표본 부족(n<5)으로 "비교 불가" 처리.
     problem = db.query(Problem).filter(Problem.problem_id == problem_id).first()
     if not problem:
         raise APIError(
@@ -126,4 +127,4 @@ async def get_problem_stats(problem_id: int, db: Session = Depends(get_db)):
             "문제를 찾을 수 없습니다.",
         )
 
-    return build_baseline(db, problem)
+    return build_cohort_baseline(db, problem_id)

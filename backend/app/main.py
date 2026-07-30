@@ -10,11 +10,14 @@ from app.model import ingest as ingest_model
 from app.model import feedback as feedback_model
 from app.model import submission as submission_model
 from app.model import baseline as baseline_model
+from app.model import timeline as timeline_model
+from app.model import insight as insight_model
 
 from app.api import auth
 from app.api import problem as problem_api
 from app.api import session as session_api
 from app.api import analysis as analysis_api
+from app.api import timeline as timeline_api
 from app.api import ingest as ingest_api
 from app.api import feedback as feedback_api
 from app.api import submission as submission_api
@@ -59,6 +62,7 @@ app.include_router(problem_api.router)
 app.include_router(session_api.router)
 app.include_router(session_api.users_router)
 app.include_router(analysis_api.router)
+app.include_router(timeline_api.router)
 app.include_router(ingest_api.router)
 app.include_router(feedback_api.router)
 app.include_router(submission_api.router)

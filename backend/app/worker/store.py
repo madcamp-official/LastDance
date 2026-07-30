@@ -15,7 +15,10 @@ from app.model.analysis import (
     UnmatchedSegmentRow,
 )
 from app.model.ast_tree import AstDiffEventRow, AstSnapshotRow, AstTreeEvolutionRow
+from app.model.insight import ProblemFeedbackInsight
+from app.model.timeline import CodeCommitRow, SessionSegmentRow
 from app.schema.analysis import AnalysisResult, AstTreeEvolution, UnmatchedSegment
+from app.schema.timeline import TimelineResult
 
 # 트리 변화 이력 저장 상한 (세션당). 요약 행(AstTreeEvolutionRow)의 집계값은 상한 적용
 # 전 전체 기준으로 채우고, 상세 행만 잘라 truncated=True로 표시한다.
@@ -201,6 +204,121 @@ def _write_ast_evolution(
     if diff_rows:
         # 세션당 수천 행까지 갈 수 있어 ORM 단건 add 대신 executemany 한 방으로
         db.execute(insert(AstDiffEventRow), diff_rows)
+
+
+def save_timeline(
+    db: Session,
+    sid: str,
+    user_id: str,
+    problem_id: int,
+    lang: Optional[str],
+    result: TimelineResult,
+    tier: Optional[str] = None,
+) -> None:
+    """Stage A 산출 영속화 (git-timeline-feedback-spec.md §3.1~§3.2, §3.4).
+
+    멱등: 같은 sid 재처리 시 code_commits/session_segments/session_summaries를
+    지우고 다시 쓴다. session_summaries는 컬럼 의미가 재정의됐다 (§3.4):
+      formation_ms ← STALL_SUSPECT 합, debug_ms ← DEBUG_LOOP+HIGH_CHURN 합,
+      refine_ms ← STEADY+BURST_WRITE 합, matcher_version ← timeline_version.
+    pause_events/pivot_events/pattern_windows/unmatched_segments/ast_trees는
+    신규 기록을 중단했으므로 여기서 건드리지 않는다 (과거 세션 조회 호환).
+    """
+    db.query(CodeCommitRow).filter(CodeCommitRow.sid == sid).delete()
+    db.query(SessionSegmentRow).filter(SessionSegmentRow.sid == sid).delete()
+    db.query(SessionSummary).filter(SessionSummary.sid == sid).delete()
+
+    db.add(
+        SessionSummary(
+            sid=sid,
+            user_id=user_id,
+            problem_id=problem_id,
+            tier=tier,
+            lang=lang,
+            analysis_level=result.analysis_level,
+            matcher_version=result.timeline_version,
+            total_ms=result.total_ms,
+            setup_ms=0,                          # 타임라인 파이프라인에는 SETUP 단계가 없다
+            formation_ms=result.stall_ms,
+            debug_ms=result.debug_ms,
+            refine_ms=result.steady_ms,
+            keystroke_count=result.keystroke_count,
+            pause_total_ms=result.pause_total_ms,
+            pause_count=result.pause_count,
+            pivot_count=0,                       # AST pivot 개념 폐기 (§3.4)
+            local_rewrite_count=0,
+            code_bytes=len(result.final_code.encode("utf-8")),
+            created_at=datetime.now(tz=UTC),
+        )
+    )
+    for c in result.commits:
+        db.add(
+            CodeCommitRow(
+                sid=sid, user_id=user_id, problem_id=problem_id,
+                seq=c.seq, kind=c.kind, t_ms=c.t_ms,
+                pause_before_ms=c.pause_before_ms, duration_ms=c.duration_ms,
+                hunks_json=json.dumps([h.model_dump() for h in c.hunks], ensure_ascii=False),
+                verdict=c.verdict,
+                lines_added=c.lines_added, lines_deleted=c.lines_deleted,
+                lines_modified=c.lines_modified, net_lines=c.net_lines,
+                churn_lines=c.churn_lines,
+                snapshot_hash=c.snapshot_hash, snapshot_text=c.snapshot_text,
+                timeline_version=result.timeline_version,
+            )
+        )
+    for s in result.segments:
+        db.add(
+            SessionSegmentRow(
+                sid=sid, user_id=user_id, problem_id=problem_id,
+                seg_id=s.seg_id, label=s.label,
+                commit_start_seq=s.commit_start_seq, commit_end_seq=s.commit_end_seq,
+                t_start_ms=s.t_start_ms, t_end_ms=s.t_end_ms,
+                pause_ms=s.pause_ms, lines_touched=s.lines_touched, net_lines=s.net_lines,
+                timeline_version=result.timeline_version,
+            )
+        )
+    db.commit()
+
+
+def save_insights(
+    db: Session,
+    sid: str,
+    user_id: str,
+    problem_id: int,
+    validated: list,          # List[app.schema.insight.ValidatedInsight]
+    analyzer_version: str,
+) -> None:
+    """Stage B 산출 영속화 (§3.3, §4.5.5).
+
+    멱등: sid + analyzer_version 기준 삭제 후 재삽입. 검증 실패분도
+    status="discarded"로 남겨 M3'(인사이트 discard율)을 계산할 수 있게 한다.
+    """
+    db.query(ProblemFeedbackInsight).filter(
+        ProblemFeedbackInsight.sid == sid,
+        ProblemFeedbackInsight.analyzer_version == analyzer_version,
+    ).delete()
+
+    now = datetime.now(tz=UTC)
+    for v in validated:
+        ins = v.insight
+        t_start, t_end = ins.t_range_ms
+        db.add(
+            ProblemFeedbackInsight(
+                problem_id=problem_id, user_id=user_id, sid=sid,
+                stage=ins.stage, category=ins.category,
+                logic_label=ins.logic_label, description=ins.description,
+                severity=ins.severity,
+                commit_start_seq=ins.commit_range[0], commit_end_seq=ins.commit_range[1],
+                t_start_ms=t_start, t_end_ms=t_end,
+                duration_ms=max(0, t_end - t_start),
+                evidence_json=json.dumps(ins.evidence, ensure_ascii=False),
+                advice=ins.advice,
+                analyzer_version=analyzer_version,
+                status=v.status,
+                created_at=now,
+            )
+        )
+    db.commit()
 
 
 def save_llm_candidates(

@@ -100,6 +100,16 @@ CREATE TABLE session_summaries (
   created_at        TIMESTAMP NOT NULL
   -- 코드 전문(final_code)은 이 테이블/공개 API 어디에도 저장하지 않는다(개인정보 분리 원칙).
   -- 재생 재구성 코드는 raw blob(RAW_STORE_DIR, zstd 압축)에만 존재.
+  --
+  -- 2026-07-30 컬럼 의미 재정의 (git-timeline-feedback-spec.md §3.4) — 컬럼 구성은 그대로:
+  --   analysis_level : 'full' | 'degraded' ('timing_only'는 타임라인 파이프라인에 없음 — 언어 무관)
+  --   matcher_version: timeline_version 값을 기록
+  --   setup_ms       : 항상 0 (SETUP 단계 개념 폐기)
+  --   formation_ms   : STALL_SUSPECT 세그먼트 지속 합
+  --   debug_ms       : DEBUG_LOOP + HIGH_CHURN 세그먼트 지속 합
+  --   refine_ms      : STEADY + BURST_WRITE 세그먼트 지속 합
+  --   pause_total_ms / pause_count : 커밋 경계 pause(pause_before_ms) 합 / 개수
+  --   pivot_count / local_rewrite_count : 항상 0 (AST pivot 개념 폐기)
 );
 
 -- 정지(pause) 구간 — 세션당 N행
@@ -148,6 +158,80 @@ CREATE TABLE feedbacks (
   generated_at  TIMESTAMP NOT NULL,
   rating        TEXT                         -- 'up' | 'down' | NULL
 );
+
+-- ============================================================================
+-- git 방식 타임라인 파이프라인 (git-timeline-feedback-spec.md §3, 2026-07-30 신규)
+-- 위 pause_events/pivot_events/pattern_windows/unmatched_segments/ast_* 는 신규 기록
+-- 중단(과거 세션 조회용으로만 유지)되고, 신규 세션은 아래 두 테이블 + insights를 쓴다.
+-- ============================================================================
+
+-- 세션별 git 방식 코드 작성 기록 — 커밋 1개 = 1행 (제출도 같은 seq 공간)
+CREATE TABLE code_commits (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  sid              TEXT NOT NULL,
+  user_id          TEXT NOT NULL,
+  problem_id       INTEGER NOT NULL,
+  seq              INTEGER NOT NULL,          -- sid 내 순서
+  kind             TEXT NOT NULL,             -- 'edit' | 'submit'
+  t_ms             INTEGER NOT NULL,          -- 커밋을 닫은 시각
+  pause_before_ms  INTEGER NOT NULL DEFAULT 0,-- 이 커밋 시작 전 정지 시간 (경계 임계값 5000ms)
+  duration_ms      INTEGER NOT NULL DEFAULT 0,-- 커밋 안에서 타이핑한 시간
+  hunks_json       TEXT NOT NULL DEFAULT '[]',-- [{op:add|del|mod, old_start, new_start, old_lines[], new_lines[]}]
+  verdict          TEXT,                      -- kind='submit'일 때만: AC|WA|TLE|RE|CE|PENDING
+  lines_added      INTEGER NOT NULL DEFAULT 0,
+  lines_deleted    INTEGER NOT NULL DEFAULT 0,
+  lines_modified   INTEGER NOT NULL DEFAULT 0,
+  net_lines        INTEGER NOT NULL DEFAULT 0,-- 추가 − 삭제
+  churn_lines      INTEGER NOT NULL DEFAULT 0,-- 누적 2회 이상 수정된 라인 수 (stable line id 기준)
+  snapshot_hash    TEXT NOT NULL DEFAULT '',  -- sha256 앞 16자
+  snapshot_text    TEXT,                      -- 제출·세션 종료 커밋만
+  timeline_version INTEGER NOT NULL,
+  UNIQUE (sid, seq)
+);
+
+-- 결정론적 라벨 구간 — 같은 라벨의 연속 편집 커밋 묶음 (제출이 경계)
+CREATE TABLE session_segments (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  sid              TEXT NOT NULL,
+  user_id          TEXT NOT NULL,
+  problem_id       INTEGER NOT NULL,
+  seg_id           TEXT NOT NULL,             -- 'sg_0' ...
+  label            TEXT NOT NULL,             -- STALL_SUSPECT | HIGH_CHURN | DEBUG_LOOP | BURST_WRITE | STEADY
+  commit_start_seq INTEGER NOT NULL,
+  commit_end_seq   INTEGER NOT NULL,
+  t_start_ms       INTEGER NOT NULL,
+  t_end_ms         INTEGER NOT NULL,
+  pause_ms         INTEGER NOT NULL DEFAULT 0,
+  lines_touched    INTEGER NOT NULL DEFAULT 0,
+  net_lines        INTEGER NOT NULL DEFAULT 0,
+  timeline_version INTEGER NOT NULL
+);
+
+-- 문제별 피드백 사항 + 관련 타임라인 (LLM 세션 분석기 산출).
+-- 같은 problem_id로 조회하면 다른 사용자들이 어느 단계에서 얼마나 걸렸는지가 나온다
+-- — 비교군 집계(GET /problems/{id}/stats, POST /feedback)의 유일한 원천.
+CREATE TABLE problem_feedback_insights (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  problem_id       INTEGER NOT NULL,
+  user_id          TEXT NOT NULL,
+  sid              TEXT NOT NULL,
+  stage            TEXT NOT NULL,             -- 정준 enum 9종 (docs/api-spec.md Timeline 절)
+  category         TEXT NOT NULL,             -- 'stall' | 'churn' | 'debug_loop' | 'smooth'
+  logic_label      TEXT NOT NULL,             -- 자유 서술: 'DP 점화식 도출' 등
+  description      TEXT NOT NULL,
+  severity         TEXT NOT NULL,             -- 'high' | 'medium' | 'low'
+  commit_start_seq INTEGER NOT NULL,
+  commit_end_seq   INTEGER NOT NULL,
+  t_start_ms       INTEGER NOT NULL,
+  t_end_ms         INTEGER NOT NULL,
+  duration_ms      INTEGER NOT NULL,
+  evidence_json    TEXT NOT NULL DEFAULT '[]',
+  advice           TEXT,
+  analyzer_version TEXT NOT NULL,             -- 프롬프트+모델 버전 (백필 기준)
+  status           TEXT NOT NULL DEFAULT 'valid'  -- 'valid' | 'discarded'(검증 실패, discard율 메트릭용)
+);
+CREATE INDEX ix_problem_feedback_insights_problem_stage
+  ON problem_feedback_insights (problem_id, stage);
 
 -- 사용자별 누적 통계 (테이블만 생성됨 — 현재 이 테이블을 채우거나 읽는 API 없음. 미사용/스캐폴드)
 CREATE TABLE summaries (
