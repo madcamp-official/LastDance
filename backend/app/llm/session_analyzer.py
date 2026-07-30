@@ -29,7 +29,9 @@ from app.schema.timeline import Commit, TimelineResult
 
 logger = logging.getLogger("app.llm.session_analyzer")
 
-PROMPT_VERSION = 1
+# v2: 사용자 프롬프트에 입출력 예시 블록 추가, pause/dur 반올림(§4.1 :.0f), 최종 코드와
+#     중복되는 마지막 제출 스냅샷 생략.
+PROMPT_VERSION = 2
 ANALYZER_VERSION = f"session-analyzer-v{PROMPT_VERSION}/{LLM_MODEL}"
 
 _SEED = 20260730
@@ -42,6 +44,8 @@ MAX_HUNK_LINES = 40             # 커밋당 hunk 라인 최대 40줄
 MAX_LINE_CHARS = 160            # 라인당 160자 절단
 MAX_STATEMENT_CHARS = 3000      # 지문 3000자 초과 시 절단
 MAX_FINAL_CODE_LINES = 400      # 최종 코드 400줄 초과 시 앞 400줄
+MAX_EXAMPLES = 2                # 입출력 예시 개수 상한
+MAX_EXAMPLE_CHARS = 400         # 예시 입력/출력 각각의 문자 상한
 # 모델 컨텍스트의 60% 상한을 문자 예산으로 근사(qwen3-coder 32k 컨텍스트 기준).
 # 초과하면 STEADY 세그먼트의 hunk 원문부터 통계 요약으로 축약한다(라벨·수치는 유지).
 MAX_COMMIT_LOG_CHARS = 60000
@@ -102,15 +106,16 @@ def render_commit_log(result: TimelineResult, collapse_steady: bool = False) -> 
     for c in result.commits:
         if c.kind == "submit":
             out.append(f"@s{c.seq} t={_fmt_t(c.t_ms)} SUBMIT verdict={c.verdict or 'PENDING'}")
-            if c.snapshot_text:
+            # 최종 코드와 같은 스냅샷은 생략 — 프롬프트 뒤 [최종 코드] 블록(§4.3)과 중복이다
+            if c.snapshot_text and c.snapshot_text != result.final_code:
                 out.append(f"\n=== 스냅샷: @s{c.seq} 제출 시점 전체 코드 ===")
                 out.append(_numbered(c.snapshot_text, MAX_FINAL_CODE_LINES))
                 out.append("=== 스냅샷 끝 ===\n")
             continue
         tag = f" [{seg_first[c.seq]}]" if c.seq in seg_first else ""
         out.append(
-            f"@c{c.seq} t={_fmt_t(c.t_ms)} pause={c.pause_before_ms // 1000}s "
-            f"dur={c.duration_ms // 1000}s{tag}"
+            f"@c{c.seq} t={_fmt_t(c.t_ms)} pause={c.pause_before_ms / 1000:.0f}s "
+            f"dur={c.duration_ms / 1000:.0f}s{tag}"
         )
         if collapse_steady and c.segment_label == "STEADY":
             out.append(
@@ -132,7 +137,7 @@ def render_segment_summary(result: TimelineResult) -> str:
             f"({_fmt_t(s.t_start_ms)}~{_fmt_t(s.t_end_ms)}, {dur // 60}분{dur % 60:02d}초)"
         )
         lines.append(
-            f"  pause합={s.pause_ms // 1000}s, 만진라인={s.lines_touched}, 순증가={s.net_lines}"
+            f"  pause합={s.pause_ms / 1000:.0f}s, 만진라인={s.lines_touched}, 순증가={s.net_lines}"
         )
     return "\n".join(lines)
 
@@ -233,6 +238,20 @@ def build_user_prompt(problem, result: TimelineResult, lang: str) -> str:
         value = getattr(problem, attr, None) if problem else None
         if value:
             lines.append(f"{label}: {value}")
+
+    # §4.3의 입력/출력 형식 필드는 problems 테이블에 컬럼이 없어 항상 비는데, 이 정보 없이는
+    # "출력 형식 수정" 류의 stage를 코드만 보고 명명할 수 없다. 실제로 가진 examples(입출력
+    # 예시)로 그 자리를 채운다. 결정론 유지를 위해 개수·길이를 고정 상한으로 자른다.
+    examples = (getattr(problem, "examples", None) or []) if problem else []
+    if isinstance(examples, list) and examples:
+        lines.append("입출력 예시:")
+        for ex in examples[:MAX_EXAMPLES]:
+            if not isinstance(ex, dict):
+                continue
+            got_in = str(ex.get("input", ""))[:MAX_EXAMPLE_CHARS]
+            got_out = str(ex.get("output", ""))[:MAX_EXAMPLE_CHARS]
+            lines.append(f"  입력: {got_in}")
+            lines.append(f"  출력: {got_out}")
 
     verdict_seq = result.verdict_seq
     lines += [
