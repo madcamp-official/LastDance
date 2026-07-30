@@ -13,7 +13,7 @@ export function ProblemListPage() {
   const page = Number(searchParams.get('page') ?? '1')
 
   const [showSolved, setShowSolved] = useState(false)
-  const [selectedDifficulties, setSelectedDifficulties] = useState<DifficultyTier[]>([])
+  const [selectedDifficulties, setSelectedDifficulties] = useState<DifficultyTier[]>(ALL_TIERS)
 
   const [items, setItems] = useState<ProblemListItem[]>([])
   const [total, setTotal] = useState(0)
@@ -83,6 +83,11 @@ export function ProblemListPage() {
     setSearchParams({ page: '1' })
   }
 
+  function toggleAllDifficulties() {
+    setSelectedDifficulties((prev) => (prev.length === ALL_TIERS.length ? [] : ALL_TIERS))
+    setSearchParams({ page: '1' })
+  }
+
   function handleShowSolvedChange(checked: boolean) {
     setShowSolved(checked)
     setSearchParams({ page: '1' })
@@ -112,15 +117,6 @@ export function ProblemListPage() {
       <h1 className="mb-6 text-2xl font-semibold">문제 목록</h1>
 
       <div className="mb-6 flex flex-wrap items-center gap-4 rounded-md border border-gray-200 p-3 text-sm dark:border-gray-800">
-        <label className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={showSolved}
-            onChange={(e) => handleShowSolvedChange(e.target.checked)}
-            className="h-4 w-4 rounded border-gray-300"
-          />
-          Show solved problems
-        </label>
         <div className="flex flex-wrap items-center gap-1.5">
           {ALL_TIERS.map((tier) => (
             <button
@@ -133,7 +129,24 @@ export function ProblemListPage() {
               {tier}
             </button>
           ))}
+          <button
+            type="button"
+            onClick={toggleAllDifficulties}
+            aria-pressed={selectedDifficulties.length === ALL_TIERS.length}
+            className="rounded-full border border-gray-300 px-2 py-0.5 text-xs font-medium aria-pressed:border-indigo-600 aria-pressed:bg-indigo-50 aria-pressed:text-indigo-700 dark:border-gray-700 dark:aria-pressed:bg-indigo-950 dark:aria-pressed:text-indigo-300"
+          >
+            All
+          </button>
         </div>
+        <label className="ml-auto flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={showSolved}
+            onChange={(e) => handleShowSolvedChange(e.target.checked)}
+            className="h-4 w-4 rounded border-gray-300"
+          />
+          Show solved problems
+        </label>
       </div>
 
       {status === 'loading' && <p className="text-gray-500">불러오는 중...</p>}
