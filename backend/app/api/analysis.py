@@ -141,7 +141,7 @@ async def get_ast_evolution(
         state = db.query(IngestSessionState).filter(IngestSessionState.sid == session_id).first()
         if state is not None and not state.ended:
             return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content={"status": "processing"})
-        # 분석은 끝났지만 timing_only/degraded라 트리 이력이 없는 경우도 여기로 온다
+        # 분석은 끝났지만 파서가 없는 언어라 트리를 뜰 수 없었던 세션도 여기로 온다
         raise APIError(
             status.HTTP_404_NOT_FOUND, "AST_EVOLUTION_NOT_FOUND", "트리 변화 이력이 없습니다."
         )

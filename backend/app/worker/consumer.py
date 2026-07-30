@@ -17,24 +17,27 @@ from typing import Dict, List, Optional, Tuple
 from aiokafka import AIOKafkaConsumer
 
 from app.database import SessionLocal
-from app.llm.classifier import CLASSIFIER_VERSION, classify_unmatched
 from app.llm.client import LLMUnavailable, VLLMClient
+from app.llm.session_analyzer import ANALYZER_VERSION, MIN_COMMITS, analyze_session_llm
 from app.model.ingest import IngestSessionState
+from app.model.problem import Problem
 from app.model.session import Submission
-from app.schema.analysis import AnalysisResult, EditOp
+from app.model.submission import JudgeSubmission
+from app.schema.analysis import EditOp
+from app.schema.timeline import TimelineResult
 from app.util.messaging import KAFKA_BOOTSTRAP_SERVERS, KAFKA_TOPIC
-from app.worker.pipeline import analyze_session
 from app.worker.rawstore import write_raw_blob
-from app.worker.store import save_analysis, save_llm_candidates
+from app.worker.store import save_insights, save_timeline
+from app.worker.timeline import build_timeline
 
 logger = logging.getLogger(__name__)
 
 CONSUMER_GROUP_ID = "replay-worker-v1"
 
-# session.end 하나당 analyze_session(tree-sitter 파싱 + 패턴매칭)이 무거워서, Kafka
+# session.end 하나당 build_timeline(이벤트 재생 + 커밋별 라인 diff)이 무거워서, Kafka
 # 하트비트/오토커밋과 같은 이벤트루프에서 동기로 돌리면 그 루프를 막아 세션 타임아웃으로
 # 그룹에서 튕겨나간다(UnknownMemberIdError). 큐로 "언제 처리할지"를, 프로세스풀로
-# "누가 CPU를 쓰는지"를 분리해서 컨슈머 루프가 analyze_session 실행 시간과 완전히
+# "누가 CPU를 쓰는지"를 분리해서 컨슈머 루프가 build_timeline 실행 시간과 완전히
 # 무관하게 돈다.
 _FINALIZE_WORKERS = 3
 _finalize_queue: "asyncio.Queue[str]" = asyncio.Queue()
@@ -69,8 +72,10 @@ def _get_buffer(db, sid: str) -> Optional[_SessionBuffer]:
     return buf
 
 
-def _prepare_finalize(db, sid: str) -> Optional[Tuple[_SessionBuffer, List[EditOp], str]]:
-    """가벼운 부분만: 버퍼 pop, 멱등 체크, raw blob 저장. analyze_session은 여기서 안 부른다."""
+def _prepare_finalize(
+    db, sid: str
+) -> Optional[Tuple[_SessionBuffer, List[EditOp], str, List[str]]]:
+    """가벼운 부분만: 버퍼 pop, 멱등 체크, raw blob 저장. build_timeline은 여기서 안 부른다."""
     buf = _buffers.pop(sid, None)
     state = db.query(IngestSessionState).filter(IngestSessionState.sid == sid).first()
     if buf is None or state is None or state.ended:
@@ -82,17 +87,28 @@ def _prepare_finalize(db, sid: str) -> Optional[Tuple[_SessionBuffer, List[EditO
     lang = (sub.language if sub is not None else None) or buf.lang or "unknown"
     events = sorted(buf.events, key=lambda e: e.t)
     write_raw_blob(buf.problem_id, sid, events)
-    return buf, events, lang
+    # 커밋 로그에 끼워 넣을 채점 결과 (spec §2.1 제출 경계). submission.mark 시각 순서와
+    # judge_submissions 제출 순서를 인덱스로 대응시킨다 — 아직 채점 전이면 PENDING.
+    verdicts = [
+        row.verdict or "PENDING"
+        for row in db.query(JudgeSubmission)
+        .filter(JudgeSubmission.session_id == sid)
+        .order_by(JudgeSubmission.submitted_at.asc())
+        .all()
+    ]
+    return buf, events, lang, verdicts
 
 
-def _commit_finalize(db, sid: str, buf: _SessionBuffer, lang: str, result: AnalysisResult) -> None:
+def _commit_finalize(db, sid: str, buf: _SessionBuffer, lang: str, result: TimelineResult) -> None:
     state = db.query(IngestSessionState).filter(IngestSessionState.sid == sid).first()
     if state is None:
         return
     if state.seq_gap_detected:
-        result.analysis_level = "degraded"  # §8: seq 누락 세션은 기준선 삽입 제외 대상
-    save_analysis(
-        db, sid=sid, user_id=buf.user_id, problem_id=buf.problem_id, lang=lang, result=result
+        result.analysis_level = "degraded"  # §8: seq 누락 세션은 분석기 호출 제외 대상
+    problem = db.query(Problem).filter(Problem.problem_id == buf.problem_id).first()
+    save_timeline(
+        db, sid=sid, user_id=buf.user_id, problem_id=buf.problem_id, lang=lang,
+        result=result, tier=getattr(problem, "difficulty", None),
     )
     state.ended = True
     db.commit()
@@ -121,7 +137,7 @@ def _handle_message(sid: str, msg_type: str, raw: dict) -> None:
                 buf.submission_ts.append(raw.get("t", 0))
 
         elif msg_type == "session.end":
-            # 무거운 analyze_session은 여기서 절대 안 부른다 — sid만 큐에 넣고
+            # 무거운 build_timeline은 여기서 절대 안 부른다 — sid만 큐에 넣고
             # 바로 다음 Kafka 메시지로 넘어가서 하트비트/커밋 코루틴을 안 막는다.
             _finalize_queue.put_nowait(sid)
     finally:
@@ -129,10 +145,11 @@ def _handle_message(sid: str, msg_type: str, raw: dict) -> None:
 
 
 async def _finalize_worker() -> None:
-    """큐에서 sid를 꺼내 무거운 analyze_session만 별도 프로세스에 위임해 실행.
+    """큐에서 sid를 꺼내 무거운 build_timeline만 별도 프로세스에 위임해 실행.
 
-    DB 조회/커밋은 가벼워서 이 코루틴에서 직접 하고, CPU 무거운 analyze_session만
-    ProcessPoolExecutor로 보내 메인 이벤트루프(Kafka 하트비트 포함)를 절대 막지 않는다.
+    DB 조회/커밋은 가벼워서 이 코루틴에서 직접 하고, CPU 무거운 Stage A(재생 + 라인
+    diff)만 ProcessPoolExecutor로 보내 메인 이벤트루프(Kafka 하트비트 포함)를 절대
+    막지 않는다.
     """
     while True:
         sid = await _finalize_queue.get()
@@ -144,10 +161,12 @@ async def _finalize_worker() -> None:
                 db.close()
             if prepared is None:
                 continue
-            buf, events, lang = prepared
+            buf, events, lang, verdicts = prepared
 
             loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(_pool, analyze_session, events, lang, buf.submission_ts)
+            result = await loop.run_in_executor(
+                _pool, build_timeline, events, lang, buf.submission_ts, verdicts
+            )
 
             db = SessionLocal()
             try:
@@ -155,36 +174,44 @@ async def _finalize_worker() -> None:
             finally:
                 db.close()
 
-            # (addendum §2) UNMATCHED 세그먼트가 있으면 세션당 1회만 LLM 구조 분류기 호출.
-            # 결정론적 분석 결과는 위에서 이미 커밋됐으므로, 여기 실패는 세그먼트를
-            # UNMATCHED로 남길 뿐 파이프라인을 실패시키지 않는다.
-            if result.analysis_level == "full" and result.unmatched_segments:
-                try:
-                    candidates = await classify_unmatched(
-                        VLLMClient(), sid, result.unmatched_segments,
-                        result.patterns_detected, lang,
-                        problem_id=str(buf.problem_id),
-                        total_duration_ms=result.total_ms,
-                    )
-                    # 후보 0건이어도 호출: 세그먼트 상태를 discarded로 전이해
-                    # grounding 실패율(M3.5) 집계에 반영한다. LLM 미가용 시에만 pending 유지.
-                    db = SessionLocal()
-                    try:
-                        save_llm_candidates(
-                            db, sid=sid, user_id=buf.user_id, problem_id=buf.problem_id,
-                            segments=result.unmatched_segments, results=candidates,
-                            classifier_version=CLASSIFIER_VERSION,
-                        )
-                    finally:
-                        db.close()
-                except LLMUnavailable as exc:
-                    logger.warning("구조 분류기 LLM 연결 실패 (sid=%s): %s — UNMATCHED 유지", sid, exc)
-                except Exception:
-                    logger.exception("구조 분류기 처리 실패 (sid=%s) — UNMATCHED 유지", sid)
+            # Stage B (spec §4): 커밋 로그가 있으면 세션당 1회 LLM 세션 분석기 호출.
+            # 결정론적 타임라인은 위에서 이미 커밋됐으므로, 여기 실패는 인사이트를
+            # 남기지 않을 뿐 파이프라인을 실패시키지 않는다 (§1 실패 격리 규약).
+            if result.analysis_level == "full" and len(result.commits) >= MIN_COMMITS:
+                await _run_session_analyzer(sid, buf, lang, result)
         except Exception:
             logger.exception("finalize worker 처리 실패: sid=%s", sid)
         finally:
             _finalize_queue.task_done()
+
+
+async def _run_session_analyzer(
+    sid: str, buf: _SessionBuffer, lang: str, result: TimelineResult
+) -> None:
+    db = SessionLocal()
+    try:
+        problem = db.query(Problem).filter(Problem.problem_id == buf.problem_id).first()
+    finally:
+        db.close()
+    try:
+        validated, overall = await analyze_session_llm(VLLMClient(), problem, result, lang)
+        if not validated:
+            logger.info("세션 분석기 인사이트 0건 (sid=%s)", sid)
+            return
+        logger.info("세션 분석기 요약 (sid=%s): %s", sid, overall)
+        db = SessionLocal()
+        try:
+            # discarded 인사이트도 함께 저장 — M3'(discard율) 집계 대상
+            save_insights(
+                db, sid=sid, user_id=buf.user_id, problem_id=buf.problem_id,
+                validated=validated, analyzer_version=ANALYZER_VERSION,
+            )
+        finally:
+            db.close()
+    except LLMUnavailable as exc:
+        logger.warning("세션 분석기 LLM 연결 실패 (sid=%s): %s — 인사이트 없음", sid, exc)
+    except Exception:
+        logger.exception("세션 분석기 처리 실패 (sid=%s) — 인사이트 없음", sid)
 
 
 async def _consume_loop() -> None:

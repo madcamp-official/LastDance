@@ -134,7 +134,9 @@ class AnalysisResult(BaseModel):
     pattern_windows: List[PatternWindowResult] = []
     patterns_detected: List[str] = []
     unmatched_segments: List[UnmatchedSegment] = []  # 규칙 매처가 못 덮은 구간 (addendum §2)
-    ast_evolution: Optional[AstTreeEvolution] = None  # 세션 전체 트리 변화 (full 분석에서만)
+    # 세션 전체 트리 변화. analysis_level과 무관하게 파서가 있으면 항상 채워진다
+    # (degraded는 종료 시점 1개 스냅샷). 파서 없는 언어에서만 None.
+    ast_evolution: Optional[AstTreeEvolution] = None
 
 
 # ---- GET /sessions/{session_id}/analysis (분석 결과 조회) ----

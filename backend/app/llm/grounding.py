@@ -12,6 +12,7 @@ from app.model.analysis import PatternWindowRow, PauseEventRow, PivotEventRow, S
 from app.model.problem import Problem
 from app.model.submission import JudgeSubmission
 from app.schema.baseline import ProblemBaselineResponse
+from app.schema.timeline import SEGMENT_LABEL_KO
 
 logger = logging.getLogger("app.llm.grounding")
 
@@ -104,4 +105,49 @@ def build_template_feedback(
     if latest and latest.verdict:
         sentences.append(f"최종 제출 결과는 {latest.verdict}입니다.")
 
+    return " ".join(sentences)
+
+
+_MAX_TEMPLATE_INSIGHTS = 3
+_SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2}
+
+
+def build_timeline_template_feedback(insights: List, segments: List, summary=None) -> str:
+    """git-timeline-feedback-spec.md §5.4 템플릿 폴백 (Stage C).
+
+    LLM grounding 최종 실패 또는 인사이트 0개(분석기 실패/지연)일 때 쓰는 규칙 기반 문장.
+    insights는 severity 순 최대 3개만 쓰고, 없으면 세그먼트 통계만으로 생성한다.
+    입력 데이터에 실제로 있는 값만 쓰므로 grounding 문제가 원천적으로 없다.
+    """
+    sentences: List[str] = []
+
+    if insights:
+        ordered = sorted(
+            insights,
+            key=lambda i: (_SEVERITY_ORDER.get(i.severity, 3), -int(i.duration_ms or 0)),
+        )[:_MAX_TEMPLATE_INSIGHTS]
+        for i in ordered:
+            sentences.append(
+                f"{i.logic_label} 구간에서 {int(i.duration_ms or 0) // 1000}초를 사용하셨습니다."
+            )
+        return " ".join(sentences)
+
+    if not segments:
+        return "아직 행동 분석 데이터가 충분하지 않아 상세 피드백을 생성할 수 없습니다."
+
+    # 인사이트가 없을 때: 결정론적 세그먼트 통계만으로 서술한다.
+    # churn/burst를 "어려웠던 구간"으로 부르지 않는 라벨 문구를 그대로 쓴다 (§2.4 R1).
+    by_label: dict = {}
+    for s in segments:
+        by_label[s.label] = by_label.get(s.label, 0) + max(0, s.t_end_ms - s.t_start_ms)
+    top_label = max(by_label, key=lambda k: by_label[k])
+    sentences.append(
+        f"{SEGMENT_LABEL_KO.get(top_label, top_label)}에 "
+        f"{by_label[top_label] // 1000}초가 쓰였습니다."
+    )
+    stall_ms = by_label.get("STALL_SUSPECT", 0)
+    if stall_ms:
+        sentences.append(f"긴 정지가 포함된 사고 구간은 총 {stall_ms // 1000}초입니다.")
+    if summary is not None and getattr(summary, "total_ms", 0):
+        sentences.append(f"전체 풀이 시간은 {summary.total_ms // 1000}초입니다.")
     return " ".join(sentences)
