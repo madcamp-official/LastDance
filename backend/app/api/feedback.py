@@ -67,8 +67,13 @@ _SYSTEM_PROMPT = """당신은 알고리즘 문제 풀이(PS) 연습 플랫폼의
 5. 개선 방향은 [인사이트]의 advice 필드에 있는 내용만 사용하고, 자연스러운 문장으로
    녹여내세요. advice가 모두 null이면 관찰된 사실만 서술하고 개선 방향은 생략합니다.
    데이터에 없는 일반론("변수명을 명확히 하세요")을 새로 만들지 마세요.
-6. 분량: 4~7문장. 인사이트가 1~2개뿐이면 3~4문장으로 줄이세요.
-7. 어조: 존댓말, 과정 중심. 정답 여부 자체를 요약하거나 점수를 평가하지 마세요."""
+6. [커밋 로그]는 이 세션의 코드 작성 기록 전체입니다. 각 행의 hunks_json은 그 커밋에서
+   바뀐 diff hunk이며, seq 순서대로 누적 적용하면 각 시점의 코드 상태가 됩니다. 코드 전문
+   스냅샷은 주어지지 않으므로 필요하면 hunk를 누적해 유추하세요. 커밋 로그에서 인용할 수
+   있는 것은 실제로 있는 코드 조각과 숫자(t_ms, pause_before_ms, duration_ms, verdict)뿐이며,
+   없는 코드를 상상해 인용하지 마세요.
+7. 분량: 4~7문장. 인사이트가 1~2개뿐이면 3~4문장으로 줄이세요.
+8. 어조: 존댓말, 과정 중심. 정답 여부 자체를 요약하거나 점수를 평가하지 마세요."""
 
 
 def _iso(dt: datetime) -> str:
@@ -110,6 +115,7 @@ def _build_user_prompt(
     lang: Optional[str],
     cohort: Optional[CohortSummary],
     self_reference: Optional[dict] = None,
+    commits: Optional[List[CodeCommitRow]] = None,
 ) -> str:
     """§5.3 사용자 프롬프트 템플릿."""
     lines: List[str] = [f"[문제] {problem.title if problem else '알 수 없음'}", ""]
@@ -137,6 +143,22 @@ def _build_user_prompt(
                 lines.append(f"  개선 후보: {i.advice}")
     else:
         lines.append("- (분석 인사이트가 없습니다. 아래 기록만으로 서술하세요.)")
+    lines.append("")
+
+    # 커밋 로그 전체 (§3.1). sid/user_id는 세션 프롬프트에서 중복이므로 제외.
+    # snapshot_text도 제외 — hunks_json 누적으로 LLM이 코드 상태를 복원한다.
+    lines.append("[커밋 로그 — 이 세션의 코드 작성 기록 전체, seq 순]")
+    if commits:
+        lines.append(
+            "형식: seq | kind | t_ms | pause_before_ms | duration_ms | verdict | hunks_json"
+        )
+        for c in commits:
+            lines.append(
+                f"- {c.seq} | {c.kind} | {c.t_ms} | {c.pause_before_ms} | "
+                f"{c.duration_ms} | {c.verdict or '-'} | {c.hunks_json}"
+            )
+    else:
+        lines.append("- (커밋 기록이 없습니다.)")
     lines.append("")
 
     if cohort and cohort.exposable:
@@ -199,15 +221,18 @@ def _build_user_prompt(
     return "\n".join(lines)
 
 
-def _verdict_seq(db: Session, session_id: str) -> List[str]:
-    """커밋 로그의 SUBMIT 레코드가 권위 소스 (§2.1). 없으면 빈 리스트."""
-    rows = (
+def _commit_rows(db: Session, session_id: str) -> List[CodeCommitRow]:
+    """세션의 커밋 로그 전체 (§3.1). SUBMIT 레코드가 verdict 권위 소스 (§2.1)."""
+    return (
         db.query(CodeCommitRow)
-        .filter(CodeCommitRow.sid == session_id, CodeCommitRow.kind == "submit")
+        .filter(CodeCommitRow.sid == session_id)
         .order_by(CodeCommitRow.seq.asc())
         .all()
     )
-    return [r.verdict or "PENDING" for r in rows]
+
+
+def _verdict_seq(commits: List[CodeCommitRow]) -> List[str]:
+    return [c.verdict or "PENDING" for c in commits if c.kind == "submit"]
 
 
 @router.post("", response_model=FeedbackResponse)
@@ -245,7 +270,8 @@ async def create_feedback(
         .order_by(SessionSegmentRow.commit_start_seq.asc())
         .all()
     )
-    verdict_seq = _verdict_seq(db, body.session_id)
+    commits = _commit_rows(db, body.session_id)
+    verdict_seq = _verdict_seq(commits)
 
     cohort = build_cohort(
         db,
@@ -263,7 +289,7 @@ async def create_feedback(
 
     user_prompt = _build_user_prompt(
         problem, summary, insights, verdict_seq, sub.language, cohort,
-        self_reference=self_reference,
+        self_reference=self_reference, commits=commits,
     )
 
     try:

@@ -247,13 +247,17 @@ def _build_segments(commits: List[Commit], labels: Dict[int, str]) -> List[Segme
         if not run:
             return
         first, last = run[0], run[-1]
+        # 세그먼트 시작 = 첫 커밋의 pause가 시작된 시점. pause를 빼면 STALL_SUSPECT
+        # 세그먼트의 지속 시간이 "타이핑한 2초"로 찍혀 §2.4의 요점(손은 멈췄고 코드는
+        # 안 늘어남 = 사고 시간)이 사라진다. 프롬프트의 세그먼트 요약(§4.3)과
+        # session_summaries.formation_ms(§3.4)가 모두 이 값을 쓴다.
         segments.append(
             Segment(
                 seg_id=f"sg_{len(segments)}",
                 label=labels[first.seq],
                 commit_start_seq=first.seq,
                 commit_end_seq=last.seq,
-                t_start_ms=max(0, first.t_ms - first.duration_ms),
+                t_start_ms=max(0, first.t_ms - first.duration_ms - first.pause_before_ms),
                 t_end_ms=last.t_ms,
                 pause_ms=sum(c.pause_before_ms for c in run),
                 lines_touched=sum(
