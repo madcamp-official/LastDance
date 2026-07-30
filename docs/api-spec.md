@@ -287,7 +287,7 @@ ID 표기: `problem_id`는 `db-schema.md`의 `problems.id`(BIGSERIAL) 그대로 
 | 키 | 타입 | 예시 | 설명 |
 |---|---|---|---|
 | session_id | string | `"s_001"` | |
-| timeline_version | integer | `1` | Stage A 규칙 버전. 버전업 시 raw blob 재생으로 백필(§7) |
+| timeline_version | integer | `2` | Stage A 규칙 버전. 버전업 시 raw blob 재생으로 백필(§7) |
 | analysis_level | string (enum) | `"full"` | `"full"` \| `"degraded"`(seq 누락/이벤트 없음). 언어 무관 — tree-sitter를 쓰지 않는다 |
 | total_ms / keystroke_count | integer | `600000` / `842` | keystroke는 `src="user"` 이벤트만 |
 | verdict_seq | array\<string\> | `["WA","AC"]` | 제출 순서대로 |
@@ -309,7 +309,7 @@ ID 표기: `problem_id`는 `db-schema.md`의 `problems.id`(BIGSERIAL) 그대로 
 | segments[] | array\<object\> | 아래 참고 | 같은 라벨의 연속 편집 커밋 묶음. 제출이 경계 |
 | segments[].seg_id / label | string | `"sg_2"` / `"STALL_SUSPECT"` | 라벨: `STALL_SUSPECT`\|`HIGH_CHURN`\|`DEBUG_LOOP`\|`BURST_WRITE`\|`STEADY` |
 | segments[].commit_start_seq / commit_end_seq | integer | `4` / `6` | |
-| segments[].t_start_ms / t_end_ms | integer | `240000` / `310000` | |
+| segments[].t_start_ms / t_end_ms | integer | `162000` / `310000` | `t_start_ms`는 첫 커밋의 **pause가 시작된 시점** — 정지 시간이 구간에 포함되므로 `STALL_SUSPECT`의 지속 시간이 곧 사고 시간이다. 세그먼트들은 세션 시간축을 빈틈없이 분할한다 |
 | segments[].pause_ms / lines_touched / net_lines | integer | `78000` / `12` / `2` | |
 
 세그먼트 라벨은 결정론적 전처리기가 통계 규칙으로 붙인 것이며 LLM이 뒤집을 수 없다(§2.4). **UI 문구 주의**: `HIGH_CHURN`/`BURST_WRITE`는 "코드가 많이 바뀐 구간"이지 "어려웠던 구간"이 아니다 — "어려웠던 구간"으로 표시해도 되는 것은 `STALL_SUSPECT`뿐이다.
@@ -327,7 +327,7 @@ ID 표기: `problem_id`는 `db-schema.md`의 `problems.id`(BIGSERIAL) 그대로 
 | insights[].t_start_ms / t_end_ms / duration_ms | integer | `240000` / `310000` / `70000` | |
 | insights[].evidence | array\<string\> | `["c3 앞 64초 정지"]` | |
 | insights[].advice | string \| null | `"..."` | 개선 제안 1문장. 피드백 생성기는 이 필드에 있는 내용만 쓴다 |
-| insights[].analyzer_version | string | `"session-analyzer-v1/qwen3-coder:30b-a3b"` | 프롬프트+모델 버전 (백필 기준) |
+| insights[].analyzer_version | string | `"session-analyzer-v2/qwen3-coder:30b-a3b"` | 프롬프트+모델 버전 (백필 기준) |
 
 stage 정준 값: `PROBLEM_UNDERSTANDING`(문제 이해·관찰), `APPROACH_DESIGN`(접근 설계), `CORE_LOGIC_DESIGN`(핵심 논리 설계), `SCAFFOLD_IMPLEMENTATION`(뼈대 구현), `CORE_IMPLEMENTATION`(핵심 논리 코드화), `EDGE_CASE_HANDLING`(경계·예외 처리), `DEBUG_LOGIC`(논리 오류 디버깅), `DEBUG_TRIVIAL`(사소한 디버깅), `OPTIMIZATION`(시간/공간 최적화).
 
