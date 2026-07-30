@@ -199,6 +199,10 @@ CREATE TABLE session_segments (
   label            TEXT NOT NULL,             -- STALL_SUSPECT | HIGH_CHURN | DEBUG_LOOP | BURST_WRITE | STEADY
   commit_start_seq INTEGER NOT NULL,
   commit_end_seq   INTEGER NOT NULL,
+  -- t_start_ms는 첫 커밋의 pause가 시작된 시점(= 직전 커밋의 마지막 이벤트)이다.
+  -- 정지 시간을 구간에 포함시켜야 STALL_SUSPECT의 지속 시간이 "사고 시간"이 된다
+  -- (timeline_version 2부터. v1은 타이핑 시간만 담아 STALL이 수 초로 찍혔다).
+  -- 세그먼트들은 이 정의 아래 세션 시간축을 빈틈없이 분할한다.
   t_start_ms       INTEGER NOT NULL,
   t_end_ms         INTEGER NOT NULL,
   pause_ms         INTEGER NOT NULL DEFAULT 0,
